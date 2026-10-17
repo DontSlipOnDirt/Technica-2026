@@ -3,6 +3,7 @@
 # Catches scams the word lists in fraud_check.py miss.
 # Gemini never makes the decision. It only reports signs; fraud_check.py adds points.
 
+import logging
 import os
 from typing import List, Optional
 
@@ -10,6 +11,9 @@ from pydantic import BaseModel
 
 # Set GEMINI_MODEL in .env to pin a model. "gemini-flash-latest" follows the newest Flash.
 GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-flash-latest")
+
+log = logging.getLogger("gemini")
+_warned_no_key = False
 
 # Give up after this long so a slow Gemini never holds up a transfer.
 TIMEOUT_MS = 3000
@@ -36,8 +40,15 @@ def scam_signals(said: str) -> Optional[ScamSignals]:
     Ask Gemini about what the user said.
     Returns None if there's no API key or Gemini fails, so the regular rules still run.
     """
-    api_key = os.environ.get("GEMINI_API_KEY")
-    if not api_key or not said.strip():
+    global _warned_no_key
+    # Pasted keys often pick up spaces, newlines, or quotes.
+    api_key = os.environ.get("GEMINI_API_KEY", "").strip().strip("'\"").strip()
+    if not api_key:
+        if not _warned_no_key:
+            log.warning("GEMINI_API_KEY is not set; the Gemini scam check is off")
+            _warned_no_key = True
+        return None
+    if not said.strip():
         return None
 
     try:
@@ -54,6 +65,10 @@ def scam_signals(said: str) -> Optional[ScamSignals]:
                 response_schema=ScamSignals,
             ),
         )
+        if response.parsed is None:
+            log.warning("Gemini check returned nothing usable (model %s)", GEMINI_MODEL)
         return response.parsed
-    except Exception:
+    except Exception as err:
+        # Type and message only, with the key blanked; the regular rules still run.
+        log.warning("Gemini check failed: %s: %s", type(err).__name__, str(err).replace(api_key, "***")[:300])
         return None
