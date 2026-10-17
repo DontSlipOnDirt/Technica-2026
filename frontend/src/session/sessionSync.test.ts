@@ -104,3 +104,50 @@ describe('answerYes / answerNo', () => {
     expect(result.endsWith('No money was moved.')).toBe(true)
   })
 })
+
+describe('review fixes', () => {
+  async function pending85() {
+    const api = createFakeApi()
+    const { box, dispatch } = store(started)
+    await api.simulateRequest({ kind: 'transfer', payee_name: 'Maria', amount: 85 })
+    await checkCurrentTransfer(api, dispatch)
+    return { api, box, dispatch }
+  }
+
+  it('No after a voice yes says it was sent, not that no money moved', async () => {
+    const { api, box, dispatch } = await pending85()
+    await api.confirmTransfer(box.state.transfer!.transfer_id) // the agent's voice yes
+    const result = await answerNo(api, box.state, dispatch)
+    expect(result).not.toContain('No money was moved')
+    expect(result).toContain('already sent')
+    expect(box.state.panel).toBe('sent')
+  })
+
+  it('a lost confirm response that actually went through is reported as sent', async () => {
+    const { api, box, dispatch } = await pending85()
+    const real = api.confirmTransfer.bind(api)
+    vi.spyOn(api, 'confirmTransfer').mockImplementation(async (id) => {
+      await real(id)
+      throw new TypeError('fetch failed')
+    })
+    const result = await answerYes(api, box.state, dispatch)
+    expect(result).not.toContain('No money was moved')
+    expect(box.state.panel).toBe('sent')
+  })
+
+  it('a failed tap shows a message in the chat', async () => {
+    const { api, box, dispatch } = await pending85()
+    vi.spyOn(api, 'confirmTransfer').mockRejectedValue(new TypeError('fetch failed'))
+    await answerYes(api, box.state, dispatch)
+    expect(box.state.messages.at(-1)).toEqual({ role: 'agent', text: "I couldn't reach the bank. No money was moved." })
+  })
+
+  it('a refused tap shows a message in the chat', async () => {
+    const api = createFakeApi()
+    const { box, dispatch } = store(started)
+    await api.simulateRequest({ kind: 'transfer', payee_name: 'Bob', amount: 2000 })
+    await checkCurrentTransfer(api, dispatch)
+    await answerYes(api, box.state, dispatch)
+    expect(box.state.messages.at(-1)?.text.endsWith('No money was moved.')).toBe(true)
+  })
+})

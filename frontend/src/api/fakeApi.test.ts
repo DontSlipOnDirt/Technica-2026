@@ -85,3 +85,12 @@ describe('fake bank API', () => {
     expect((await api.getCurrentTransfer())?.status).toBe('cancelled')
   })
 })
+
+describe('fake bank API after sending', () => {
+  it('refuses to cancel a payment that was already sent', async () => {
+    const api = createFakeApi()
+    const t = await api.simulateRequest({ kind: 'transfer', payee_name: 'Maria', amount: 50 })
+    await api.confirmTransfer(t.transfer_id)
+    await expect(api.cancelTransfer(t.transfer_id)).rejects.toBeInstanceOf(ApiError)
+  })
+})

@@ -60,7 +60,11 @@ export function screenReducer(state: ScreenState, action: ScreenAction): ScreenS
       const t = action.transfer
       // Nothing new from the backend (or a failed check): keep the screen as it is.
       if (!t) return state
-      if (state.transfer?.transfer_id === t.transfer_id && state.transfer.status === t.status) return state
+      if (state.transfer?.transfer_id === t.transfer_id) {
+        if (state.transfer.status === t.status) return state
+        // A slow, out-of-date check must never bring back Yes/No for a finished or held transfer.
+        if (state.transfer.status !== 'awaiting_yes') return state
+      }
       return {
         ...state,
         transfer: t,

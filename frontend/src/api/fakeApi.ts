@@ -63,6 +63,7 @@ export function createFakeApi(): FakeBankApi {
 
     async cancelTransfer(transfer_id) {
       const t = find(transfer_id)
+      if (t.status === 'executed') throw new ApiError('That payment was already sent.')
       if (t.status === 'awaiting_yes') t.status = 'cancelled'
       return { status: 'cancelled' }
     },

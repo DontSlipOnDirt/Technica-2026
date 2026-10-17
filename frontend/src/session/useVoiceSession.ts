@@ -40,8 +40,19 @@ export function useVoiceSession(api: BankApi): VoiceScreenProps {
   // While a session is live, check for the current transfer once a second.
   useEffect(() => {
     if (!state.active) return
-    void checkCurrentTransfer(api, dispatch)
-    const timer = setInterval(() => void checkCurrentTransfer(api, dispatch), CHECK_EVERY_MS)
+    // Skip a check while the last one is still out, so a slow answer can't land after a newer one.
+    let inFlight = false
+    const check = async () => {
+      if (inFlight) return
+      inFlight = true
+      try {
+        await checkCurrentTransfer(api, dispatch)
+      } finally {
+        inFlight = false
+      }
+    }
+    void check()
+    const timer = setInterval(() => void check(), CHECK_EVERY_MS)
     return () => clearInterval(timer)
   }, [api, state.active])
 

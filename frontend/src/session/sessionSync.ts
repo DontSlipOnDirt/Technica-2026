@@ -41,14 +41,31 @@ async function refresh(api: BankApi, state: ScreenState, dispatch: (a: ScreenAct
   }
 }
 
+function say(dispatch: (a: ScreenAction) => void, text: string): string {
+  dispatch({ type: 'message', message: { role: 'agent', text } })
+  return text
+}
+
+/**
+ * After a failed tap, look again before claiming nothing moved: a lost response,
+ * or the agent's voice yes, may already have sent it.
+ */
+async function afterError(api: BankApi, state: ScreenState, dispatch: (a: ScreenAction) => void, err: unknown): Promise<string> {
+  const after = await refresh(api, state, dispatch)
+  if (after.transfer?.transfer_id === state.transfer?.transfer_id && after.transfer?.status === 'executed') {
+    return say(dispatch, `That payment was already sent. ${after.sentText ?? ''}`.trim())
+  }
+  return say(dispatch, failure(err))
+}
+
 /** The Yes button. Returns the sentence to tell the agent. */
 export async function answerYes(api: BankApi, state: ScreenState, dispatch: (a: ScreenAction) => void): Promise<string> {
   const t = state.transfer
-  if (t?.status !== 'awaiting_yes') return `That payment isn't waiting for a yes. ${NO_MONEY_MOVED}`
+  if (t?.status !== 'awaiting_yes') return say(dispatch, `That payment isn't waiting for a yes. ${NO_MONEY_MOVED}`)
   try {
     await api.confirmTransfer(t.transfer_id)
   } catch (err) {
-    return failure(err)
+    return afterError(api, state, dispatch, err)
   }
   const after = await refresh(api, state, dispatch)
   return `The customer tapped Yes. ${after.sentText ?? 'The payment was sent.'}`
@@ -57,11 +74,11 @@ export async function answerYes(api: BankApi, state: ScreenState, dispatch: (a: 
 /** The No button. Returns the sentence to tell the agent. */
 export async function answerNo(api: BankApi, state: ScreenState, dispatch: (a: ScreenAction) => void): Promise<string> {
   const t = state.transfer
-  if (t?.status !== 'awaiting_yes') return `That payment isn't waiting for a yes. ${NO_MONEY_MOVED}`
+  if (t?.status !== 'awaiting_yes') return say(dispatch, `That payment isn't waiting for a yes. ${NO_MONEY_MOVED}`)
   try {
     await api.cancelTransfer(t.transfer_id)
   } catch (err) {
-    return failure(err)
+    return afterError(api, state, dispatch, err)
   }
   await refresh(api, state, dispatch)
   return `The customer tapped No. The payment was cancelled. ${NO_MONEY_MOVED}`

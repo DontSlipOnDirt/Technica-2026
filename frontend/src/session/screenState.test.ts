@@ -91,3 +91,16 @@ describe('screenReducer', () => {
     expect(s.messages.map((m) => m.text)).toEqual(['hi', 'hello'])
   })
 })
+
+describe('stale checks', () => {
+  it('a finished transfer never goes back to waiting for a yes', () => {
+    const sent = withTransfer(transfer({ status: 'executed' }), withTransfer(transfer()))
+    const stale = withTransfer(transfer({ status: 'awaiting_yes' }), sent)
+    expect(stale.panel).toBe('sent')
+  })
+
+  it('a held transfer never goes back to waiting for a yes', () => {
+    const held = withTransfer(transfer({ status: 'held', decision: 'hold' }))
+    expect(withTransfer(transfer({ status: 'awaiting_yes' }), held).panel).toBe('blocked')
+  })
+})
