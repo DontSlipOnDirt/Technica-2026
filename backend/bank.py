@@ -5,6 +5,7 @@
 # A held transfer can never reach Nessie, and nothing moves money without a confirm.
 
 import logging
+import re
 import threading
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -29,6 +30,23 @@ class DemoConfig:
     payees: Dict[str, str] = field(default_factory=dict)  # lowercase name -> Nessie account ID
     trusted_contact: Optional[TrustedContact] = None
     today: Optional[str] = None           # Pin the date in tests: "2026-10-17"
+
+
+_TAG = re.compile(r"\s*\[[a-z]+:[^\]]*\]", re.IGNORECASE)
+_PAYEE_TAG = re.compile(r"\[payee:([^\]]+)\]", re.IGNORECASE)
+
+
+def _clean(description) -> str:
+    """The seed adds tags like [merchant:...][cat:...]; the agent shouldn't read them aloud."""
+    return _TAG.sub("", str(description or "")).strip()
+
+
+def _payee_of(transfer: Dict[str, Any]) -> str:
+    """Nessie's payee_id, or the [payee:...] tag the team's seed puts in the description."""
+    if transfer.get("payee_id"):
+        return transfer["payee_id"]
+    match = _PAYEE_TAG.search(str(transfer.get("description", "")))
+    return match.group(1) if match else ""
 
 
 def _as_datetime(date: str) -> str:
@@ -195,7 +213,7 @@ class Bank:
         purchases = self._get(f"/accounts/{self._config.account_id}/purchases") or []
         purchases = sorted(purchases, key=lambda p: p.get("purchase_date", ""), reverse=True)
         return [
-            {"description": p.get("description"), "amount": p.get("amount"), "date": p.get("purchase_date")}
+            {"description": _clean(p.get("description")), "amount": p.get("amount"), "date": p.get("purchase_date")}
             for p in purchases[:limit]
         ]
 
@@ -225,12 +243,12 @@ class Bank:
         bills = self._get(f"/accounts/{account_id}/bills") or []
         amounts = [float(t.get("amount", 0)) for t in transfers]
         return UserHistory(
-            known_payees=[t.get("payee_id") for t in transfers] +
+            known_payees=[_payee_of(t) for t in transfers] +
                          [f"biller:{str(b.get('payee', '')).lower()}" for b in bills],
             average_transfer=sum(amounts) / len(amounts) if amounts else 0.0,
             current_balance=float(account.get("balance", 0)),
             recent_transfers=[
-                PastTransfer(to_account_id=t.get("payee_id", ""), amount=float(t.get("amount", 0)),
+                PastTransfer(to_account_id=_payee_of(t), amount=float(t.get("amount", 0)),
                              made_at=_as_datetime(t.get("transaction_date", self._today())))
                 for t in transfers[-20:]
             ],

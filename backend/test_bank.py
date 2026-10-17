@@ -181,3 +181,28 @@ def test_held_message_never_offers_a_way_through():
     assert "release" not in t["spoken_message"].lower()
     assert "Capital One will never ask you to move money to keep it safe" in t["spoken_message"]
     assert "call Capital One" in t["spoken_message"]
+
+
+class SeededNessie(FakeNessie):
+    """Shapes from the team's real seed: payee only in a [payee:...] tag, tags in descriptions."""
+
+    def __init__(self):
+        super().__init__()
+        self.transfers = [{"id": "x1", "amount": 50, "transaction_date": "2026-10-02", "status": "completed",
+                           "description": "To Ana [payee:acct-maria]"}]
+
+    def get(self, path, params=None):
+        if path == f"/accounts/{ACCOUNT}/purchases":
+            return [{"amount": 19, "purchase_date": "2026-10-15",
+                     "description": "Corner Cafe [merchant:m1][cat:Restaurant]"}]
+        return super().get(path, params)
+
+
+def test_a_payee_tag_in_the_description_counts_as_a_known_payee():
+    t = Bank(SeededNessie(), CONFIG).request_transfer("Maria", 50)
+    assert t["risk_score"] == 0, t["reasons"]
+
+
+def test_purchase_descriptions_drop_the_seed_tags():
+    p = Bank(SeededNessie(), CONFIG).recent_purchases(1)
+    assert p[0]["description"] == "Corner Cafe"
