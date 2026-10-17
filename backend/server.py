@@ -27,4 +27,12 @@ def load_config() -> DemoConfig:
     )
 
 
-mcp, app = create_app(Bank(NessieClient.from_env(), load_config()), origins_from_env())
+def build_bank() -> Bank:
+    # DEMO_MODE=true: a built-in pretend bank, for testing the agent without Nessie.
+    if os.environ.get("DEMO_MODE", "").strip().lower() in ("1", "true", "yes"):
+        from demo_bank import DEMO_CONFIG, DemoNessie
+        return Bank(DemoNessie(), DEMO_CONFIG)
+    return Bank(NessieClient.from_env(), load_config())
+
+
+mcp, app = create_app(build_bank(), origins_from_env())
