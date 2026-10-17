@@ -11,6 +11,14 @@ interface ConfirmPanelProps {
 /** "Are you sure?" with big Yes/No buttons. Both lock after one tap so a payment can't be sent twice. */
 export function ConfirmPanel({ transfer, onYes, onNo }: ConfirmPanelProps) {
   const [busy, setBusy] = useState(false)
+  const money = formatMoney(transfer.amount)
+  const question = transfer.kind === 'withdrawal'
+    ? `Withdraw ${money} from ${transfer.from_account_name}?`
+    : transfer.kind === 'deposit'
+      ? `Deposit ${money} into ${transfer.from_account_name}?`
+      : `Pay ${transfer.payee_name} ${money} from ${transfer.from_account_name}?`
+  const yesLabel = transfer.kind === 'withdrawal' ? '✓ Yes, withdraw'
+    : transfer.kind === 'deposit' ? '✓ Yes, deposit' : '✓ Yes, pay it'
 
   async function answer(handler: () => Promise<void>) {
     if (busy) return
@@ -25,7 +33,7 @@ export function ConfirmPanel({ transfer, onYes, onNo }: ConfirmPanelProps) {
   return (
     <section className="confirm">
       <p className="confirm__question">
-        Pay {transfer.payee_name} {formatMoney(transfer.amount)} from {transfer.from_account_name}?
+        {question}
       </p>
       {transfer.decision === 'confirm' && transfer.reasons.length > 0 && (
         <ul className="confirm__warning">
@@ -34,7 +42,7 @@ export function ConfirmPanel({ transfer, onYes, onNo }: ConfirmPanelProps) {
       )}
       <div className="confirm__buttons">
         <button type="button" className="btn btn--yes" disabled={busy} onClick={() => answer(onYes)}>
-          ✓ Yes, pay it
+          {yesLabel}
         </button>
         <button type="button" className="btn btn--no" disabled={busy} onClick={() => answer(onNo)}>
           ✕ No, cancel

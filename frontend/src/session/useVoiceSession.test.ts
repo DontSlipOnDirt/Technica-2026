@@ -34,7 +34,7 @@ describe('useVoiceSession ElevenLabs integration', () => {
   it('starts the configured agent and lets the SDK own microphone capture', () => {
     const { result } = renderHook(() => useVoiceSession(createFakeApi()))
     act(() => result.current.onMicTap())
-    expect(conversation.startSession).toHaveBeenCalledWith({ agentId: 'agent_test' })
+    expect(conversation.startSession).toHaveBeenCalledWith({ agentId: 'agent_test', connectionType: 'websocket' })
   })
 
   it('shows connection errors reported by the SDK', () => {

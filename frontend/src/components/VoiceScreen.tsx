@@ -15,7 +15,11 @@ export interface VoiceScreenProps {
 }
 
 function statusLine(state: ScreenState, phase?: VoicePhase): string {
-  if (state.panel === 'blocked') return 'Transfer stopped'
+  if (state.panel === 'blocked') {
+    if (state.transfer?.kind === 'withdrawal') return 'Withdrawal stopped'
+    if (state.transfer?.kind === 'deposit') return 'Deposit stopped'
+    return 'Transfer stopped'
+  }
   if (phase === 'connecting') return 'Connecting…'
   if (phase === 'waiting') return 'Waiting for a reply…'
   if (phase === 'speaking') return 'Agent speaking…'

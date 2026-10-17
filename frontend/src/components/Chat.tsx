@@ -14,7 +14,7 @@ export function Chat({ messages }: { messages: ChatMessage[] }) {
       {messages.map((m, i) => (
         <p key={i} className={`chat__msg chat__msg--${m.role}`}>{m.text}</p>
       ))}
-      <div ref={end} />
+      <div ref={end} className="chat__end" aria-hidden="true" />
     </div>
   )
 }

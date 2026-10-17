@@ -74,7 +74,7 @@ export function useVoiceSession(api: BankApi): VoiceScreenProps {
       return
     }
     try {
-      conversation.startSession({ agentId: AGENT_ID })
+      conversation.startSession({ agentId: AGENT_ID, connectionType: 'websocket' })
     } catch {
       dispatch({ type: 'message', message: { role: 'agent', text: 'I need microphone access to hear you.' } })
     }

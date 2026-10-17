@@ -1,7 +1,7 @@
 // Shapes shared with the backend. Field names match the contract exactly (snake_case).
 
 export type Decision = 'allow' | 'confirm' | 'hold'
-export type Kind = 'transfer' | 'bill'
+export type Kind = 'transfer' | 'bill' | 'withdrawal' | 'deposit'
 export type TransferStatus = 'awaiting_yes' | 'held' | 'executed' | 'cancelled'
 
 /** The transfer the backend is currently working on, as GET /api/transfer/current returns it. */

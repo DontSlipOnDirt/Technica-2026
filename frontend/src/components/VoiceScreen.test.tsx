@@ -33,6 +33,24 @@ function show(state: ScreenState, onYes = vi.fn(async () => {}), onNo = vi.fn(as
 }
 
 describe('VoiceScreen', () => {
+  it.each([
+    { kind: 'withdrawal' as const, question: 'Withdraw $1.00 from Checking?', button: '✓ Yes, withdraw' },
+    { kind: 'deposit' as const, question: 'Deposit $1.00 into Checking?', button: '✓ Yes, deposit' },
+  ])('describes a $kind confirmation accurately', ({ kind, question, button }) => {
+    show(stateWith(transfer({ kind, amount: 1, payee_name: 'cash' })))
+    expect(screen.getByText(question)).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: button })).toBeInTheDocument()
+  })
+
+  it.each([
+    { kind: 'withdrawal' as const, message: 'We stopped your $1.00 withdrawal. Your money has not moved.', status: 'Withdrawal stopped' },
+    { kind: 'deposit' as const, message: 'We stopped your $1.00 deposit. Your money has not moved.', status: 'Deposit stopped' },
+  ])('describes a held $kind accurately', ({ kind, message, status }) => {
+    show(stateWith(transfer({ kind, amount: 1, status: 'held', decision: 'hold' })))
+    expect(screen.getByText(message)).toBeInTheDocument()
+    expect(screen.getByRole('status')).toHaveTextContent(status)
+  })
+
   it('shows the handoff and reply states after finishing a turn', () => {
     const props = { state: stateWith(null), onMicTap: vi.fn(), onYes: vi.fn(async () => {}), onNo: vi.fn(async () => {}) }
     const { rerender } = render(<VoiceScreen {...props} phase="waiting" />)

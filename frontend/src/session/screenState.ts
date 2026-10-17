@@ -41,11 +41,18 @@ const PANEL_FOR_STATUS: Record<TransferStatus, Panel> = {
   cancelled: 'none',
 }
 
-function sentText(t: CurrentTransfer): string {
-  const money = formatMoney(t.amount)
-  return t.kind === 'bill'
-    ? `Your ${t.payee_name} bill of ${money} has been sent.`
-    : `${money} has been sent to ${t.payee_name}.`
+function sentText(transfer: CurrentTransfer): string {
+  const money = formatMoney(transfer.amount)
+  switch (transfer.kind) {
+    case 'withdrawal':
+      return `${money} has been withdrawn from ${transfer.from_account_name}.`
+    case 'deposit':
+      return `${money} has been deposited into ${transfer.from_account_name}.`
+    case 'bill':
+      return `Your ${transfer.payee_name} bill of ${money} has been sent.`
+    case 'transfer':
+      return `${money} has been sent to ${transfer.payee_name}.`
+  }
 }
 
 export function screenReducer(state: ScreenState, action: ScreenAction): ScreenState {

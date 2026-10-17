@@ -245,6 +245,12 @@ body {
   line-height: 1.35;
 }
 
+.chat__end {
+  flex: 0 0 56px;
+  margin: auto -16px -12px;
+  background: #fff;
+}
+
 .chat__msg--user {
   align-self: flex-end;
   background: var(--navy);

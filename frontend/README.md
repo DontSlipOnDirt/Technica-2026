@@ -8,6 +8,9 @@ microphone access when prompted. This connection expects a public agent; an auth
 agent requires a backend-issued conversation token. Never put an ElevenLabs API key in a
 `VITE_` variable.
 
+Voice sessions explicitly use the SDK's WebSocket transport so microphone capture and
+the live volume meter use its browser Web Audio input pipeline.
+
 ## Microphone controls
 
 - Tap **Talk** to connect. While listening, the rings expand with your microphone volume.

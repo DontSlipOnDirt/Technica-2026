@@ -23,6 +23,15 @@ function withTransfer(t: CurrentTransfer, state: ScreenState = initialScreenStat
 }
 
 describe('screenReducer', () => {
+  it.each([
+    { kind: 'withdrawal' as const, message: '$1.00 has been withdrawn from Checking.' },
+    { kind: 'deposit' as const, message: '$1.00 has been deposited into Checking.' },
+  ])('describes an executed $kind accurately', ({ kind, message }) => {
+    const state = withTransfer(transfer({ kind, amount: 1, status: 'executed' }))
+    expect(state.panel).toBe('sent')
+    expect(state.sentText).toBe(message)
+  })
+
   it('held shows the scam panel', () => {
     const s = withTransfer(transfer({ status: 'held', decision: 'hold' }))
     expect(s.panel).toBe('blocked')
