@@ -24,7 +24,8 @@ INSTRUCTIONS = (
     "{ok, say, ...data} or {ok: false, error, say}. Read 'say' to the customer word for word. "
     "Money tools never move money on their own: request_transfer and pay_bill only prepare a payment "
     "and return its transfer_id. Only call confirm_payment(transfer_id) after the "
-    "customer clearly says yes. If a payment is stopped as a possible scam, do not argue or offer "
+    "customer clearly says yes. Never make up balances, amounts, payees, bills, or purchases. "
+    "If a payment is stopped as a possible scam, do not argue or offer "
     "workarounds; tell them to call Capital One."
 )
 
@@ -34,8 +35,18 @@ async def _run(fn: Callable[..., Any], *args) -> Any:
     return await anyio.to_thread.run_sync(lambda: fn(*args))
 
 
+# Added to every tool description: ElevenLabs passes these to the model on each turn.
+GROUNDING = (
+    " Never make up balances, amounts, payees, bills, or purchases: only say what this tool returned."
+    " If ok is false, read 'say' and do not guess."
+)
+
+
 def create_app(bank: Bank, allowed_origins: Optional[list] = None) -> Tuple[MCPServer, Starlette]:
     mcp = MCPServer(name="capital-one-voice", instructions=INSTRUCTIONS)
+
+    def tool(description: str):
+        return mcp.tool(description=description + GROUNDING)
 
     # ---- MCP tools (the agent) ----------------------------------------------------
     # Every tool replies with one JSON object:
@@ -49,7 +60,7 @@ def create_app(bank: Bank, allowed_origins: Optional[list] = None) -> Tuple[MCPS
         say = f"{err} {NO_MONEY_MOVED}" if money_tool else str(err)
         return json.dumps({"ok": False, "error": str(err), "say": say})
 
-    @mcp.tool(description="The customer's balance and bills that are due. Replies with JSON: ok, say, summary.")
+    @tool("The customer's balance and bills that are due. Replies with JSON: ok, say, summary.")
     async def get_summary() -> str:
         try:
             summary = await _run(bank.summary)
@@ -57,7 +68,7 @@ def create_app(bank: Bank, allowed_origins: Optional[list] = None) -> Tuple[MCPS
             return failed(err, money_tool=False)
         return ok(f"Your {summary['account_name'].lower()} balance is ${summary['balance']:,.2f}.", summary=summary)
 
-    @mcp.tool(description="The customer's most recent purchases, newest first. Replies with JSON: ok, say, purchases.")
+    @tool("The customer's most recent purchases, newest first. Replies with JSON: ok, say, purchases.")
     async def get_recent_purchases(limit: int = 10) -> str:
         try:
             purchases = await _run(bank.recent_purchases, limit)
@@ -65,7 +76,7 @@ def create_app(bank: Bank, allowed_origins: Optional[list] = None) -> Tuple[MCPS
             return failed(err, money_tool=False)
         return ok(f"Here are your last {len(purchases)} purchases.", purchases=purchases)
 
-    @mcp.tool(description=(
+    @tool((
         "Prepare a transfer to someone the customer names. Does NOT send money. "
         "Replies with JSON: ok, say (read it aloud exactly), transfer (transfer_id, status, decision, "
         "risk_score, reasons, ...). If transfer.status is 'held', the payment is stopped for good."
@@ -77,7 +88,7 @@ def create_app(bank: Bank, allowed_origins: Optional[list] = None) -> Tuple[MCPS
             return failed(err, money_tool=True)
         return ok(t["spoken_message"], transfer=t)
 
-    @mcp.tool(description=(
+    @tool((
         "Prepare a bill payment by biller name, e.g. 'Pepco'. Leave amount out to pay the bill in full. "
         "Does NOT send money. Replies with JSON: ok, say (read it aloud exactly), transfer."
     ))
@@ -88,7 +99,7 @@ def create_app(bank: Bank, allowed_origins: Optional[list] = None) -> Tuple[MCPS
             return failed(err, money_tool=True)
         return ok(t["spoken_message"], transfer=t)
 
-    @mcp.tool(description=(
+    @tool((
         "Send the payment that is waiting for a yes. Only call this after the customer clearly says yes. "
         "Pass transfer.transfer_id from request_transfer or pay_bill. Replies with JSON: ok, say, transfer."
     ))
@@ -100,7 +111,7 @@ def create_app(bank: Bank, allowed_origins: Optional[list] = None) -> Tuple[MCPS
         return ok(f"Done. ${t['amount']:,.2f} has been sent to {t['payee_name']}. Is there anything else I can help with?",
                   transfer=t)
 
-    @mcp.tool(description="Cancel the payment that is waiting for a yes, when the customer says no. Replies with JSON.")
+    @tool("Cancel the payment that is waiting for a yes, when the customer says no. Replies with JSON.")
     async def cancel_payment(transfer_id: str) -> str:
         try:
             t = await _run(bank.cancel, transfer_id)

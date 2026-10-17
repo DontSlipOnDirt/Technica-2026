@@ -185,3 +185,9 @@ async def test_nessie_down_gives_sentences_not_crashes():
     assert tool_json(await mcp.call_tool("get_recent_purchases", {})) == down
     reply = tool_json(await mcp.call_tool("request_transfer", {"payee_name": "Maria", "amount": 50}))
     assert reply["say"] == "I couldn't reach the bank right now. No money was moved."
+
+
+async def test_every_tool_tells_the_agent_not_to_make_things_up(setup):
+    _, _, mcp, _ = setup
+    for tool in await mcp.list_tools():
+        assert "Never make up" in tool.description, tool.name
