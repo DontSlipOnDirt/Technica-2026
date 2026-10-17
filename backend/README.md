@@ -21,7 +21,7 @@ This replaces the TypeScript stdio server on the `nessie-mcp` branch. ElevenLabs
 
 ## MCP tools (for the agent)
 
-`get_summary`, `get_recent_purchases`, `request_transfer(payee_name, amount, memo)`, `pay_bill(biller_name, amount?)`, `confirm_payment(transfer_id)`, `cancel_payment(transfer_id)`.
+`get_summary`, `list_accounts`, `get_recent_purchases`, `request_transfer(payee_name, amount, memo)`, `pay_bill(biller_name, amount?)`, `withdraw(amount, memo)`, `deposit(amount, memo)`, `confirm_payment(transfer_id)`, `cancel_payment(transfer_id)`. `withdraw` and `deposit` take the same request → fraud check → yes path as transfers.
 
 Every tool replies with one JSON object:
 

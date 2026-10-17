@@ -109,8 +109,9 @@ async def test_get_recent_purchases_is_json(setup):
 async def test_there_is_no_tool_that_moves_money_directly(setup):
     _, _, mcp, _ = setup
     names = {t.name for t in await mcp.list_tools()}
-    assert names == {"get_summary", "get_recent_purchases", "request_transfer", "pay_bill",
-                     "confirm_payment", "cancel_payment"}
+    # withdraw and deposit only prepare; confirm_payment is still the only tool that moves money.
+    assert names == {"get_summary", "list_accounts", "get_recent_purchases", "request_transfer", "pay_bill",
+                     "withdraw", "deposit", "confirm_payment", "cancel_payment"}
 
 
 # ---- App endpoints: what the screen calls -----------------------------------------
@@ -191,3 +192,27 @@ async def test_every_tool_tells_the_agent_not_to_make_things_up(setup):
     _, _, mcp, _ = setup
     for tool in await mcp.list_tools():
         assert "Never make up" in tool.description, tool.name
+
+
+async def test_list_accounts_tool(setup):
+    _, _, mcp, _ = setup
+    reply = tool_json(await mcp.call_tool("list_accounts", {}))
+    assert reply["ok"] is True
+    assert [a["name"] for a in reply["accounts"]] == ["Checking", "Rainy day"]
+
+
+async def test_withdraw_then_confirm_says_done(setup):
+    nessie, _, mcp, _ = setup
+    reply = tool_json(await mcp.call_tool("withdraw", {"amount": 40}))
+    assert reply["transfer"]["status"] == "awaiting_yes"
+    done = tool_json(await mcp.call_tool("confirm_payment", {"transfer_id": reply["transfer"]["transfer_id"]}))
+    assert done["say"].startswith("Done. $40.00 has been taken out of your checking account")
+    assert nessie.posted[0][0].endswith("/withdrawals")
+
+
+async def test_deposit_then_confirm_says_done(setup):
+    nessie, _, mcp, _ = setup
+    reply = tool_json(await mcp.call_tool("deposit", {"amount": 25}))
+    done = tool_json(await mcp.call_tool("confirm_payment", {"transfer_id": reply["transfer"]["transfer_id"]}))
+    assert done["say"].startswith("Done. $25.00 has been added to your checking account")
+    assert nessie.posted[0][0].endswith("/deposits")

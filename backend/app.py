@@ -68,6 +68,15 @@ def create_app(bank: Bank, allowed_origins: Optional[list] = None) -> Tuple[MCPS
             return failed(err, money_tool=False)
         return ok(f"Your {summary['account_name'].lower()} balance is ${summary['balance']:,.2f}.", summary=summary)
 
+    @tool("Every account the customer has (checking, savings, ...) with its balance. Replies with JSON: ok, say, accounts.")
+    async def list_accounts() -> str:
+        try:
+            accounts = await _run(bank.list_accounts)
+        except BankError as err:
+            return failed(err, money_tool=False)
+        names = ", ".join(f"{a['name']} with ${float(a['balance'] or 0):,.2f}" for a in accounts)
+        return ok(f"You have {len(accounts)} account{'s' if len(accounts) != 1 else ''}: {names}.", accounts=accounts)
+
     @tool("The customer's most recent purchases, newest first. Replies with JSON: ok, say, purchases.")
     async def get_recent_purchases(limit: int = 10) -> str:
         try:
@@ -100,16 +109,40 @@ def create_app(bank: Bank, allowed_origins: Optional[list] = None) -> Tuple[MCPS
         return ok(t["spoken_message"], transfer=t)
 
     @tool((
+        "Prepare a cash withdrawal from the customer's account. Does NOT move money. "
+        "Replies with JSON: ok, say (read it aloud exactly), transfer. If transfer.status is 'held', it is stopped for good."
+    ))
+    async def withdraw(amount: float, memo: str = "") -> str:
+        try:
+            t = await _run(bank.withdraw, amount, memo)
+        except BankError as err:
+            return failed(err, money_tool=True)
+        return ok(t["spoken_message"], transfer=t)
+
+    @tool((
+        "Prepare a deposit into the customer's account. Does NOT move money. "
+        "Replies with JSON: ok, say (read it aloud exactly), transfer."
+    ))
+    async def deposit(amount: float, memo: str = "") -> str:
+        try:
+            t = await _run(bank.deposit, amount, memo)
+        except BankError as err:
+            return failed(err, money_tool=True)
+        return ok(t["spoken_message"], transfer=t)
+
+    @tool((
         "Send the payment that is waiting for a yes. Only call this after the customer clearly says yes. "
-        "Pass transfer.transfer_id from request_transfer or pay_bill. Replies with JSON: ok, say, transfer."
+        "Pass transfer.transfer_id from request_transfer, pay_bill, withdraw, or deposit. Replies with JSON: ok, say, transfer."
     ))
     async def confirm_payment(transfer_id: str) -> str:
         try:
             t = await _run(bank.confirm, transfer_id)
         except BankError as err:
             return failed(err, money_tool=True)
-        return ok(f"Done. ${t['amount']:,.2f} has been sent to {t['payee_name']}. Is there anything else I can help with?",
-                  transfer=t)
+        account = t["from_account_name"].lower()
+        what = {"withdrawal": f"taken out of your {account} account",
+                "deposit": f"added to your {account} account"}.get(t["kind"], f"sent to {t['payee_name']}")
+        return ok(f"Done. ${t['amount']:,.2f} has been {what}. Is there anything else I can help with?", transfer=t)
 
     @tool("Cancel the payment that is waiting for a yes, when the customer says no. Replies with JSON.")
     async def cancel_payment(transfer_id: str) -> str:

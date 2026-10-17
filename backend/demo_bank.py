@@ -49,14 +49,24 @@ class DemoNessie:
             f"/accounts/{ROSE}/bills": self.bills,
             f"/accounts/{ROSE}/purchases": self.purchases,
         }
+        routes["/customers/demo-rose/accounts"] = [
+            {**routes[f"/accounts/{ROSE}"]},
+            {"_id": "demo-rose-savings", "type": "Savings", "nickname": "Rose savings", "balance": 12500.0},
+        ]
+        routes[f"/accounts/{ROSE}"]["customer_id"] = "demo-rose"
         if path not in routes:
             from nessie import NessieApiError
             raise NessieApiError("Not found in demo data", 404)
         return routes[path]
 
     def post(self, path: str, body: Any) -> Any:
-        self.balance -= float(body["amount"])
-        self.transfers.append({"payer_id": ROSE, **body})
+        if path.endswith("/deposits"):
+            self.balance += float(body["amount"])
+        elif path.endswith("/withdrawals"):
+            self.balance -= float(body["amount"])
+        else:
+            self.balance -= float(body["amount"])
+            self.transfers.append({"payer_id": ROSE, **body})
         return {"code": 201}
 
     def put(self, path: str, body: Any) -> Any:

@@ -28,7 +28,10 @@ class FakeNessie:
 
     def get(self, path, params=None):
         if path == f"/accounts/{ACCOUNT}":
-            return {"_id": ACCOUNT, "balance": self.balance, "nickname": "Checking"}
+            return {"_id": ACCOUNT, "balance": self.balance, "nickname": "Checking", "customer_id": "cust-rose"}
+        if path == "/customers/cust-rose/accounts":
+            return [{"_id": ACCOUNT, "type": "Checking", "nickname": "Checking", "balance": self.balance},
+                    {"_id": "acct-rose-savings", "type": "Savings", "nickname": "Rainy day", "balance": 9000}]
         if path == f"/accounts/{ACCOUNT}/transfers":
             return self.transfers
         if path == f"/accounts/{ACCOUNT}/bills":
@@ -97,7 +100,8 @@ def test_yes_sends_exactly_what_was_checked_once():
     assert bank.confirm(t["transfer_id"])["status"] == "executed"
     assert nessie.posted == [(
         f"/accounts/{ACCOUNT}/transfers",
-        {"medium": "balance", "payee_id": "acct-maria", "amount": 50, "transaction_date": "2026-10-17", "description": "Lunch"},
+        {"transaction_date": "2026-10-17", "status": "completed", "amount": 50,
+         "description": "Lunch [payee:acct-maria]"},
     )]
 
 
@@ -206,3 +210,56 @@ def test_a_payee_tag_in_the_description_counts_as_a_known_payee():
 def test_purchase_descriptions_drop_the_seed_tags():
     p = Bank(SeededNessie(), CONFIG).recent_purchases(1)
     assert p[0]["description"] == "Corner Cafe"
+
+
+# ---- Accounts, deposits, withdrawals ------------------------------------------------
+
+def test_list_accounts_names_every_account_without_ids():
+    accounts = make_bank().list_accounts()
+    assert accounts == [
+        {"name": "Checking", "type": "Checking", "balance": 3000.0},
+        {"name": "Rainy day", "type": "Savings", "balance": 9000},
+    ]
+
+
+def test_withdrawal_waits_for_a_yes_then_posts_once():
+    nessie = FakeNessie()
+    bank = Bank(nessie, CONFIG)
+    t = bank.withdraw(40)
+    assert t["kind"] == "withdrawal" and t["status"] == "awaiting_yes"
+    assert t["spoken_message"].startswith("I'll take $40.00 out of your checking account")
+    assert nessie.posted == []
+    bank.confirm(t["transfer_id"])
+    bank.confirm(t["transfer_id"])
+    assert nessie.posted == [(f"/accounts/{ACCOUNT}/withdrawals", {
+        "medium": "balance", "amount": 40, "transaction_date": "2026-10-17", "description": "Withdrawal"})]
+
+
+def test_a_scam_story_holds_a_withdrawal():
+    nessie = FakeNessie()
+    bank = Bank(nessie, CONFIG)
+    bank.add_transcript_line("c1", "they said take out cash and move it to a safe account right now")
+    t = bank.withdraw(2000)
+    assert t["status"] == "held"
+    with pytest.raises(BankError):
+        bank.confirm(t["transfer_id"])
+    assert nessie.posted == []
+
+
+def test_deposit_waits_for_a_yes_then_posts():
+    nessie = FakeNessie()
+    bank = Bank(nessie, CONFIG)
+    t = bank.deposit(25, "Birthday check")
+    assert t["kind"] == "deposit"
+    assert t["spoken_message"].startswith("I'll put $25.00 into your checking account")
+    bank.confirm(t["transfer_id"])
+    assert nessie.posted == [(f"/accounts/{ACCOUNT}/deposits", {
+        "medium": "balance", "amount": 25, "transaction_date": "2026-10-17", "description": "Birthday check"})]
+
+
+def test_deposits_and_withdrawals_must_be_positive():
+    bank = make_bank()
+    with pytest.raises(BankError):
+        bank.withdraw(0)
+    with pytest.raises(BankError):
+        bank.deposit(-5)
