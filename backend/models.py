@@ -53,3 +53,13 @@ class FraudDecision:
     reasons: List[str]            # Plain-English reasons, e.g. ["New payee"]
     spoken_message: str           # What the voice agent reads out loud
     transfer_id: str              # So a held transfer can be found later
+
+
+@dataclass
+class FamilyAlert:
+    """Sent to the trusted contact when a transfer is held. The app shows these."""
+    transfer_id: str
+    contact_name: str
+    contact_phone: str
+    message: str                  # Plain-English alert text
+    created_at: str               # Format: "2026-10-17T14:32:00"
