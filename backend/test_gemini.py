@@ -144,3 +144,21 @@ def test_cache_stays_small(monkeypatch, fake_gemini):
     for i in range(gemini_signals.CACHE_SIZE + 10):
         gemini_signals.prefetch(f"line {i}")
     assert len(gemini_signals._cache) <= gemini_signals.CACHE_SIZE
+
+
+# ---- What the prompt tells Gemini to look for ------------------------------------------
+
+@pytest.mark.parametrize("sign", [
+    "tech support",          # "Microsoft support" / "Amazon security" calls
+    "a company",             # impersonating any well-known company, not just the bank
+    "courier or driver",     # cash handed to someone sent to collect it
+    "keep it from their bank",
+])
+def test_prompt_names_the_scams_the_first_version_missed(sign):
+    assert sign in gemini_signals.PROMPT
+
+
+def test_prompt_maps_each_sign_to_a_field():
+    # Rule 7 counts impersonation and unusual_payment, so the prompt says which sign goes where.
+    for field in ("impersonation", "pressure", "unusual_payment"):
+        assert f"{field}:" in gemini_signals.PROMPT
