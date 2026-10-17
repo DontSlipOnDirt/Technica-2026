@@ -1,7 +1,7 @@
 import type { ScreenState } from '../session/screenState'
 import { Chat } from './Chat'
 import { ConfirmPanel } from './ConfirmPanel'
-import { MicOrb } from './MicOrb'
+import { MicOrb, type VoicePhase } from './MicOrb'
 import { ScamBox } from './ScamBox'
 import { SentBox } from './SentBox'
 
@@ -10,16 +10,21 @@ export interface VoiceScreenProps {
   onMicTap(): void
   onYes(): Promise<void>
   onNo(): Promise<void>
+  phase?: VoicePhase
+  getAudioLevel?(): number
 }
 
-function statusLine(state: ScreenState): string {
+function statusLine(state: ScreenState, phase?: VoicePhase): string {
   if (state.panel === 'blocked') return 'Transfer stopped'
+  if (phase === 'connecting') return 'Connecting…'
+  if (phase === 'waiting') return 'Waiting for a reply…'
+  if (phase === 'speaking') return 'Agent speaking…'
   if (state.panel === 'confirming') return 'Say yes or no'
   return state.active ? 'Listening…' : 'Tap to talk'
 }
 
 /** The one voice screen: logo, mic, status, the current panel, and the chat. */
-export function VoiceScreen({ state, onMicTap, onYes, onNo }: VoiceScreenProps) {
+export function VoiceScreen({ state, phase, getAudioLevel, onMicTap, onYes, onNo }: VoiceScreenProps) {
   const { panel, transfer } = state
   return (
     <main className={`screen${panel === 'blocked' ? ' screen--blocked' : ''}`}>
@@ -29,8 +34,8 @@ export function VoiceScreen({ state, onMicTap, onYes, onNo }: VoiceScreenProps) 
       </header>
 
       <div className="screen__mic">
-        <MicOrb active={state.active} blocked={panel === 'blocked'} onTap={onMicTap} />
-        <p className="screen__status">{statusLine(state)}</p>
+        <MicOrb active={state.active} blocked={panel === 'blocked'} phase={phase} getAudioLevel={getAudioLevel} onTap={onMicTap} />
+        <p className="screen__status" role="status">{statusLine(state, phase)}</p>
       </div>
 
       {panel === 'confirming' && transfer && (

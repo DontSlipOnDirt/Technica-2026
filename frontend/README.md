@@ -1,4 +1,33 @@
-# React + TypeScript + Vite
+# Voice banking frontend
+
+## Run locally
+
+Copy `.env.example` to `.env.local`, then run `npm install` and `npm run dev` from `frontend/`.
+The example includes the public ElevenLabs agent ID. Use localhost or HTTPS and allow
+microphone access when prompted. This connection expects a public agent; an authenticated
+agent requires a backend-issued conversation token. Never put an ElevenLabs API key in a
+`VITE_` variable.
+
+## Microphone controls
+
+- Tap **Talk** to connect. While listening, the rings expand with your microphone volume.
+- Tap **Done talking** to mute your input and hand over the turn. ElevenLabs detects the
+  resulting silence according to the agent's turn-taking settings; the tap does not force
+  an immediate server response or disconnect the conversation.
+- The microphone moves while waiting. During the reply, the rings follow the agent's audio.
+- The mic opens again after the reply. Tap **Talk again** while waiting to resume input,
+  or **Talk to interrupt** during the reply to open the mic and speak.
+- Reduced-motion settings disable movement while retaining audio level feedback through opacity.
+
+`VITE_USE_FAKE_API=true` keeps banking endpoints in demo mode even with a live voice agent.
+For backend integration, set it to `false`, set `VITE_API_BASE` to the backend URL, and
+configure the agent's MCP server to use that same backend's public `/mcp` endpoint.
+For deployment, set these environment variables in the frontend hosting project's build
+configuration. Restart Vite or rebuild after changing them.
+
+Run `npm test`, `npm run build`, and `npm run lint` to verify changes.
+
+## Vite toolchain
 
 This template provides a minimal setup to get React working in Vite with HMR and some Oxlint rules.
 

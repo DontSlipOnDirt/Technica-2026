@@ -1,14 +1,43 @@
+import { useEffect, useRef } from 'react'
+
+export type VoicePhase = 'idle' | 'connecting' | 'listening' | 'waiting' | 'speaking'
+
 interface MicOrbProps {
   active: boolean
   blocked: boolean
   onTap(): void
+  phase?: VoicePhase
+  getAudioLevel?(): number
 }
 
-/** The big round button. Rings pulse while the session is live; a red shield shows when a scam was stopped. */
-export function MicOrb({ active, blocked, onTap }: MicOrbProps) {
-  const className = ['orb', active && 'orb--active', blocked && 'orb--blocked'].filter(Boolean).join(' ')
+export function MicOrb({ active, blocked, phase, getAudioLevel, onTap }: MicOrbProps) {
+  const buttonRef = useRef<HTMLButtonElement>(null)
+  useEffect(() => {
+    const button = buttonRef.current
+    if (!button) return
+    button.style.setProperty('--mic-level', '0')
+    if (!active || blocked || !getAudioLevel) return
+    let frame: number
+    const update = () => {
+      const sample = getAudioLevel()
+      const level = Number.isFinite(sample) ? Math.min(1, Math.max(0, (sample - 0.01) * 4)) : 0
+      button.style.setProperty('--mic-level', String(level))
+      frame = requestAnimationFrame(update)
+    }
+    frame = requestAnimationFrame(update)
+    return () => {
+      cancelAnimationFrame(frame)
+      button.style.setProperty('--mic-level', '0')
+    }
+  }, [active, blocked, getAudioLevel])
+
+  const className = ['orb', active && 'orb--active', phase && `orb--${phase}`, blocked && 'orb--blocked'].filter(Boolean).join(' ')
+  const label = phase === 'connecting' ? 'Connecting'
+    : phase === 'waiting' ? 'Talk again'
+    : phase === 'speaking' ? 'Talk to interrupt'
+    : active ? 'Done talking' : 'Talk'
   return (
-    <button type="button" className={className} aria-label={active ? 'Done talking' : 'Talk'} onClick={onTap}>
+    <button ref={buttonRef} type="button" className={className} aria-label={label} disabled={phase === 'connecting'} onClick={onTap}>
       <span className="orb__ring" />
       <span className="orb__ring orb__ring--2" />
       <span className="orb__ring orb__ring--3" />

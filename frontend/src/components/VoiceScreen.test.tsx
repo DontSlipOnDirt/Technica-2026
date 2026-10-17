@@ -33,6 +33,15 @@ function show(state: ScreenState, onYes = vi.fn(async () => {}), onNo = vi.fn(as
 }
 
 describe('VoiceScreen', () => {
+  it('shows the handoff and reply states after finishing a turn', () => {
+    const props = { state: stateWith(null), onMicTap: vi.fn(), onYes: vi.fn(async () => {}), onNo: vi.fn(async () => {}) }
+    const { rerender } = render(<VoiceScreen {...props} phase="waiting" />)
+    expect(screen.getByText('Waiting for a reply…')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Talk again' })).toBeInTheDocument()
+    rerender(<VoiceScreen {...props} phase="speaking" />)
+    expect(screen.getByText('Agent speaking…')).toBeInTheDocument()
+  })
+
   it('idle shows Tap to talk and the logo', () => {
     show(stateWith(null, false))
     expect(screen.getByText('Tap to talk')).toBeInTheDocument()
