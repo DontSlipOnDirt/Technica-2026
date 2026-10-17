@@ -34,7 +34,8 @@ class NessieClient:
 
     @classmethod
     def from_env(cls) -> "NessieClient":
-        api_key = os.environ.get("NESSIE_API_KEY")
+        # Pasted keys often pick up spaces, newlines, or quotes; any of those makes Nessie answer 404.
+        api_key = os.environ.get("NESSIE_API_KEY", "").strip().strip("'\"").strip()
         if not api_key:
             raise RuntimeError("NESSIE_API_KEY is required")
         return cls(api_key, base_url=os.environ.get("NESSIE_BASE_URL"))

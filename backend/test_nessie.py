@@ -72,3 +72,8 @@ def test_the_api_key_never_reaches_the_logs(caplog):
 
     client_with(handler).get("/accounts/a1")
     assert "test-key" not in caplog.text
+
+
+def test_from_env_strips_spaces_and_quotes(monkeypatch):
+    monkeypatch.setenv("NESSIE_API_KEY", '  "abc123"\n')
+    assert NessieClient.from_env()._api_key == "abc123"
