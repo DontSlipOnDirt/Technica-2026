@@ -12,6 +12,7 @@ from datetime import datetime
 from typing import Any, Dict, List, Optional
 
 import fraud_check
+import gemini_signals
 from models import PastTransfer, TransferRequest, TrustedContact, UserHistory
 from nessie import NessieApiError
 
@@ -75,6 +76,9 @@ class Bank:
                 self._conversation_id = conversation_id
                 self._lines = []
             self._lines.append(text)
+            said = " ".join(self._lines)
+        # Check what they've said so far while they keep talking; request_transfer reuses it.
+        gemini_signals.prefetch(said)
 
     # ---- Requests (from the agent) ----------------------------------------------
 
@@ -135,7 +139,7 @@ class Bank:
                 "decision": "hold" if held else decision.decision,
                 "risk_score": decision.risk_score,
                 "reasons": reasons,
-                "spoken_message": self._spoken(held, reasons, kind, payee_name, amount),
+                "spoken_message": self._spoken(held, decision.decision == "confirm", reasons, kind, payee_name, amount),
                 "payee_name": payee_name,
                 "amount": amount,
                 "from_account_name": self._config.account_name,
@@ -145,7 +149,8 @@ class Bank:
             self._current_id = transfer["transfer_id"]
             return dict(transfer)
 
-    def _spoken(self, held: bool, reasons: List[str], kind: str, payee_name: str, amount: float) -> str:
+    def _spoken(self, held: bool, careful: bool, reasons: List[str], kind: str, payee_name: str,
+                amount: float) -> str:
         if held:
             # Our own wording: the fraud check's message offers a PIN release, which this app doesn't have.
             why = "".join(f" {r}." for r in reasons)
@@ -156,10 +161,16 @@ class Bank:
             )
         account = self._config.account_name.lower()
         if kind == "withdrawal":
-            return f"I'll take ${amount:,.2f} out of your {account} account. Are you sure?"
-        if kind == "deposit":
-            return f"I'll put ${amount:,.2f} into your {account} account. Are you sure?"
-        return f"I'll pay {payee_name} ${amount:,.2f} from your {account} account. Are you sure?"
+            ask = f"I'll take ${amount:,.2f} out of your {account} account. Are you sure?"
+        elif kind == "deposit":
+            ask = f"I'll put ${amount:,.2f} into your {account} account. Are you sure?"
+        else:
+            ask = f"I'll pay {payee_name} ${amount:,.2f} from your {account} account. Are you sure?"
+        if careful:
+            # A "confirm" decision: say why before asking, so the yes is an informed one.
+            why = "".join(f" {r}." for r in reasons)
+            return f"Before I do this, please double-check.{why} {ask}"
+        return ask
 
     # ---- Yes / No (from the agent or the app) ------------------------------------
 

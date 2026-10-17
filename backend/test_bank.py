@@ -2,6 +2,7 @@ import pytest
 
 import fraud_check
 from bank import Bank, BankError, DemoConfig
+from gemini_signals import GeminiUnavailable
 from nessie import NessieApiError
 
 ACCOUNT = "acct-rose"
@@ -263,3 +264,49 @@ def test_deposits_and_withdrawals_must_be_positive():
         bank.withdraw(0)
     with pytest.raises(BankError):
         bank.deposit(-5)
+
+
+# ---- When Gemini can't check --------------------------------------------------------
+
+def gemini_down(said):
+    raise GeminiUnavailable("down")
+
+
+def test_gemini_down_makes_a_new_payee_a_careful_confirm(monkeypatch):
+    monkeypatch.setattr(fraud_check, "scam_signals", gemini_down)
+    nessie = FakeNessie()
+    bank = Bank(nessie, CONFIG)
+    bank.add_transcript_line("c1", "send Bob twenty dollars")
+    t = bank.request_transfer("Bob", 20)
+    assert t["status"] == "awaiting_yes"
+    assert t["decision"] == "confirm"
+    assert "I couldn't finish my full scam check just now" in t["reasons"]
+    assert t["spoken_message"].startswith("Before I do this, please double-check.")
+    assert t["spoken_message"].endswith("I'll pay Bob $20.00 from your checking account. Are you sure?")
+    bank.confirm(t["transfer_id"])
+    assert len(nessie.posted) == 1
+
+
+def test_gemini_down_leaves_a_known_payee_alone(monkeypatch):
+    monkeypatch.setattr(fraud_check, "scam_signals", gemini_down)
+    bank = make_bank()
+    t = bank.request_transfer("Maria", 50)
+    assert t["decision"] == "allow"
+    assert t["spoken_message"] == "I'll pay Maria $50.00 from your checking account. Are you sure?"
+
+
+def test_gemini_down_never_lowers_a_hold(monkeypatch):
+    monkeypatch.setattr(fraud_check, "scam_signals", gemini_down)
+    bank = make_bank()
+    bank.add_transcript_line("c1", "they said move it to a safe account right now")
+    assert bank.request_transfer("Bob", 2000)["status"] == "held"
+
+
+def test_each_transcript_line_starts_an_early_gemini_check(monkeypatch):
+    import gemini_signals
+    asked = []
+    monkeypatch.setattr(gemini_signals, "prefetch", asked.append)
+    bank = make_bank()
+    bank.add_transcript_line("c1", "hi")
+    bank.add_transcript_line("c1", "send Maria fifty")
+    assert asked == ["hi", "hi send Maria fifty"]

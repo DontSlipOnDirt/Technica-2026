@@ -9,7 +9,7 @@ import uuid
 from datetime import datetime, timedelta
 
 from models import TransferRequest, UserHistory, FraudDecision, PastTransfer, TrustedContact, FamilyAlert
-from gemini_signals import scam_signals
+from gemini_signals import GeminiUnavailable, scam_signals
 
 # PIN that releases a held transfer. Set RELEASE_PIN in .env; "1234" is the demo default.
 RELEASE_PIN = os.environ.get("RELEASE_PIN", "1234")
@@ -123,12 +123,22 @@ def check_transfer(request: TransferRequest, history: UserHistory) -> FraudDecis
 
     # Rule 7: Gemini reads what they said for scam stories the word lists miss.
     # Skipped if Rule 4 already caught a scam phrase, so the same thing isn't counted twice.
-    # Gemini only adds points. If it's unavailable, the rules above still decide.
+    # Gemini only adds points. With no key it's off and the rules above decide.
+    gemini_down = False
     if not scam_phrase:
-        signals = scam_signals(request.user_said)
+        try:
+            signals = scam_signals(request.user_said)
+        except GeminiUnavailable:
+            signals, gemini_down = None, True
         if signals and (signals.impersonation or signals.unusual_payment):
             risk_score += POINTS_GEMINI_SCAM_STORY
             reasons.append("What you described sounds like a common scam")
+
+    # Rule 8: if Gemini couldn't check, money going somewhere new gets at least a careful
+    # confirm. It never holds on its own, and never lowers a score the other rules set.
+    if gemini_down and request.to_account_id not in history.known_payees:
+        reasons.append("I couldn't finish my full scam check just now")
+        risk_score = max(risk_score, CONFIRM_AT)
 
     risk_score = min(risk_score, 100)
 
