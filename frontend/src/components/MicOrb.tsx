@@ -1,16 +1,17 @@
 import { useEffect, useRef } from 'react'
 
-export type VoicePhase = 'idle' | 'connecting' | 'listening' | 'waiting' | 'speaking'
+export type VoicePhase = 'idle' | 'connecting' | 'listening' | 'waiting' | 'speaking' | 'paused'
 
 interface MicOrbProps {
   active: boolean
   blocked: boolean
   onTap(): void
   phase?: VoicePhase
+  micMuted?: boolean
   getAudioLevel?(): number
 }
 
-export function MicOrb({ active, blocked, phase, getAudioLevel, onTap }: MicOrbProps) {
+export function MicOrb({ active, blocked, phase, micMuted, getAudioLevel, onTap }: MicOrbProps) {
   const buttonRef = useRef<HTMLButtonElement>(null)
   useEffect(() => {
     const button = buttonRef.current
@@ -33,8 +34,9 @@ export function MicOrb({ active, blocked, phase, getAudioLevel, onTap }: MicOrbP
 
   const className = ['orb', active && 'orb--active', phase && `orb--${phase}`, blocked && 'orb--blocked'].filter(Boolean).join(' ')
   const label = phase === 'connecting' ? 'Connecting'
+    : micMuted ? 'Start listening'
     : phase === 'waiting' ? 'Talk again'
-    : phase === 'speaking' ? 'Talk to interrupt'
+    : phase === 'speaking' ? 'Done talking'
     : active ? 'Done talking' : 'Talk'
   return (
     <button ref={buttonRef} type="button" className={className} aria-label={label} disabled={phase === 'connecting'} onClick={onTap}>

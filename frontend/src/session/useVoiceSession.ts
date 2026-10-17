@@ -10,6 +10,7 @@ import { answerNo, answerYes, checkCurrentTransfer, forwardUserLine } from './se
 
 const CHECK_EVERY_MS = 1000
 const AGENT_ID = import.meta.env.VITE_ELEVENLABS_AGENT_ID as string | undefined
+const PAUSE_COMMAND = /^(?:stop(?: listening)?|(?:i am|i['’]m) done talking)[.!?]*$/i
 
 export function useVoiceSession(api: BankApi): VoiceScreenProps {
   const [state, dispatch] = useReducer(screenReducer, initialScreenState)
@@ -30,16 +31,17 @@ export function useVoiceSession(api: BankApi): VoiceScreenProps {
     },
     onMessage: ({ role, message }) => {
       dispatch({ type: 'message', message: { role, text: message } })
-      if (role === 'user') void forwardUserLine(api, stateRef.current, message)
+      if (role === 'user') {
+        if (conversation.status === 'connected' && PAUSE_COMMAND.test(message.trim().replace(/\s+/g, ' '))) {
+          conversation.setMuted(true)
+        } else {
+          void forwardUserLine(api, stateRef.current, message)
+        }
+      }
     },
   })
 
   const { mode, isMuted, setMuted } = conversation
-  const previousMode = useRef(mode)
-  useEffect(() => {
-    if (previousMode.current === 'speaking' && mode === 'listening' && isMuted) setMuted(false)
-    previousMode.current = mode
-  }, [mode, isMuted, setMuted])
 
   // While a session is live, check for the current transfer once a second.
   useEffect(() => {
@@ -64,7 +66,7 @@ export function useVoiceSession(api: BankApi): VoiceScreenProps {
 
   const onMicTap = useCallback(() => {
     if (connected) {
-      setMuted(mode === 'speaking' ? false : !isMuted)
+      setMuted(!isMuted)
       return
     }
     if (conversation.status === 'connecting') return
@@ -78,7 +80,7 @@ export function useVoiceSession(api: BankApi): VoiceScreenProps {
     } catch {
       dispatch({ type: 'message', message: { role: 'agent', text: 'I need microphone access to hear you.' } })
     }
-  }, [connected, mode, isMuted, setMuted, conversation])
+  }, [connected, isMuted, setMuted, conversation])
 
   const tell = useCallback((text: string) => {
     if (connected) conversation.sendContextualUpdate(text)
@@ -95,10 +97,10 @@ export function useVoiceSession(api: BankApi): VoiceScreenProps {
   const phase = conversation.status === 'connecting' ? 'connecting'
     : !connected ? 'idle'
     : mode === 'speaking' ? 'speaking'
-    : isMuted ? 'waiting' : 'listening'
+    : isMuted ? 'paused' : 'listening'
   const getAudioLevel = !connected ? undefined
     : mode === 'speaking' ? conversation.getOutputVolume
     : !isMuted ? conversation.getInputVolume : undefined
 
-  return { state, phase, getAudioLevel, onMicTap, onYes, onNo }
+  return { state, phase, micMuted: isMuted, getAudioLevel, onMicTap, onYes, onNo }
 }

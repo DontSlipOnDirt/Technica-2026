@@ -58,7 +58,7 @@ describe('useVoiceSession ElevenLabs integration', () => {
     expect(result.current.getAudioLevel).toBeUndefined()
   })
 
-  it('finishes input on a tap and waits with the mic muted through the reply', () => {
+  it('keeps the microphone paused after the reply until the user taps again', () => {
     conversation.status = 'connected'
     const api = createFakeApi()
     const { result, rerender } = renderHook(() => useVoiceSession(api))
@@ -66,7 +66,7 @@ describe('useVoiceSession ElevenLabs integration', () => {
     expect(conversation.setMuted).toHaveBeenCalledWith(true)
     conversation.isMuted = true
     rerender()
-    expect(result.current.phase).toBe('waiting')
+    expect(result.current.phase).toBe('paused')
     conversation.setMuted.mockClear()
     conversation.mode = 'speaking'
     rerender()
@@ -75,14 +75,36 @@ describe('useVoiceSession ElevenLabs integration', () => {
     expect(conversation.setMuted).not.toHaveBeenCalled()
     conversation.mode = 'listening'
     rerender()
+    expect(conversation.setMuted).not.toHaveBeenCalled()
+    expect(result.current.phase).toBe('paused')
+    act(() => result.current.onMicTap())
     expect(conversation.setMuted).toHaveBeenCalledWith(false)
   })
 
   it('opens the mic when tapping during an agent reply', () => {
     conversation.status = 'connected'
     conversation.mode = 'speaking'
+    conversation.isMuted = true
     const { result } = renderHook(() => useVoiceSession(createFakeApi()))
     act(() => result.current.onMicTap())
     expect(conversation.setMuted).toHaveBeenCalledWith(false)
+  })
+
+  it.each(['stop', 'STOP.', 'I am done talking.', "I'm done talking", 'I’m done talking'])('pauses microphone capture for the spoken command %s', (message) => {
+    conversation.status = 'connected'
+    const { result } = renderHook(() => useVoiceSession(createFakeApi()))
+    act(() => callbacks.onMessage?.({ message, role: 'user', source: 'user', event_id: 1 }))
+    expect(conversation.setMuted).toHaveBeenCalledWith(true)
+    expect(result.current.state.messages.at(-1)?.text).toBe(message)
+  })
+
+  it.each([
+    { message: 'Stop my payment', role: 'user' as const, source: 'user' as const },
+    { message: 'stop', role: 'agent' as const, source: 'ai' as const },
+  ])('does not pause for a banking request or agent speech: %j', (message) => {
+    conversation.status = 'connected'
+    renderHook(() => useVoiceSession(createFakeApi()))
+    act(() => callbacks.onMessage?.({ ...message, event_id: 1 }))
+    expect(conversation.setMuted).not.toHaveBeenCalled()
   })
 })

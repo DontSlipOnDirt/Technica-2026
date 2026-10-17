@@ -5,7 +5,7 @@
 Copy `.env.example` to `.env.local`, then run `npm install` and `npm run dev` from `frontend/`.
 The example includes the public ElevenLabs agent ID. Use localhost or HTTPS and allow
 microphone access when prompted. This connection expects a public agent; an authenticated
-agent requires a backend-issued conversation token. Never put an ElevenLabs API key in a
+agent requires a backend-issued signed URL. Never put an ElevenLabs API key in a
 `VITE_` variable.
 
 Voice sessions explicitly use the SDK's WebSocket transport so microphone capture and
@@ -17,9 +17,10 @@ the live volume meter use its browser Web Audio input pipeline.
 - Tap **Done talking** to mute your input and hand over the turn. ElevenLabs detects the
   resulting silence according to the agent's turn-taking settings; the tap does not force
   an immediate server response or disconnect the conversation.
-- The microphone moves while waiting. During the reply, the rings follow the agent's audio.
-- The mic opens again after the reply. Tap **Talk again** while waiting to resume input,
-  or **Talk to interrupt** during the reply to open the mic and speak.
+- Say **Stop** or **I am done talking** to pause microphone capture after the phrase is
+  transcribed. A banking request such as "stop my payment" does not pause it.
+- During the reply, the rings follow the agent's audio. The mic stays muted after the reply;
+  tap **Start listening** to resume. The agent can still speak while the microphone is paused.
 - Reduced-motion settings disable movement while retaining audio level feedback through opacity.
 
 `VITE_USE_FAKE_API=true` keeps banking endpoints in demo mode even with a live voice agent.

@@ -33,6 +33,12 @@ function show(state: ScreenState, onYes = vi.fn(async () => {}), onNo = vi.fn(as
 }
 
 describe('VoiceScreen', () => {
+  it('offers Start listening while microphone input is paused', () => {
+    render(<VoiceScreen state={stateWith(null)} phase="paused" micMuted onMicTap={vi.fn()} onYes={vi.fn(async () => {})} onNo={vi.fn(async () => {})} />)
+    expect(screen.getByRole('status')).toHaveTextContent('Microphone paused — tap to listen')
+    expect(screen.getByRole('button', { name: 'Start listening' })).toBeInTheDocument()
+  })
+
   it.each([
     { kind: 'withdrawal' as const, question: 'Withdraw $1.00 from Checking?', button: '✓ Yes, withdraw' },
     { kind: 'deposit' as const, question: 'Deposit $1.00 into Checking?', button: '✓ Yes, deposit' },

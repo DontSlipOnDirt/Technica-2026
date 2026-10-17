@@ -11,24 +11,26 @@ export interface VoiceScreenProps {
   onYes(): Promise<void>
   onNo(): Promise<void>
   phase?: VoicePhase
+  micMuted?: boolean
   getAudioLevel?(): number
 }
 
-function statusLine(state: ScreenState, phase?: VoicePhase): string {
+function statusLine(state: ScreenState, phase?: VoicePhase, micMuted?: boolean): string {
   if (state.panel === 'blocked') {
     if (state.transfer?.kind === 'withdrawal') return 'Withdrawal stopped'
     if (state.transfer?.kind === 'deposit') return 'Deposit stopped'
     return 'Transfer stopped'
   }
   if (phase === 'connecting') return 'Connecting…'
+  if (phase === 'paused') return 'Microphone paused — tap to listen'
   if (phase === 'waiting') return 'Waiting for a reply…'
-  if (phase === 'speaking') return 'Agent speaking…'
+  if (phase === 'speaking') return micMuted ? 'Agent speaking… Microphone paused.' : 'Agent speaking…'
   if (state.panel === 'confirming') return 'Say yes or no'
   return state.active ? 'Listening…' : 'Tap to talk'
 }
 
 /** The one voice screen: logo, mic, status, the current panel, and the chat. */
-export function VoiceScreen({ state, phase, getAudioLevel, onMicTap, onYes, onNo }: VoiceScreenProps) {
+export function VoiceScreen({ state, phase, micMuted, getAudioLevel, onMicTap, onYes, onNo }: VoiceScreenProps) {
   const { panel, transfer } = state
   return (
     <main className={`screen${panel === 'blocked' ? ' screen--blocked' : ''}`}>
@@ -38,8 +40,8 @@ export function VoiceScreen({ state, phase, getAudioLevel, onMicTap, onYes, onNo
       </header>
 
       <div className="screen__mic">
-        <MicOrb active={state.active} blocked={panel === 'blocked'} phase={phase} getAudioLevel={getAudioLevel} onTap={onMicTap} />
-        <p className="screen__status" role="status">{statusLine(state, phase)}</p>
+        <MicOrb active={state.active} blocked={panel === 'blocked'} phase={phase} micMuted={micMuted} getAudioLevel={getAudioLevel} onTap={onMicTap} />
+        <p className="screen__status" role="status">{statusLine(state, phase, micMuted)}</p>
       </div>
 
       {panel === 'confirming' && transfer && (
