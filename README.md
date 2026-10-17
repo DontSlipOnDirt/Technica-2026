@@ -1,5 +1,12 @@
 # Technica-2026 Voice Banking MCP
 
+**What runs today:** `frontend/` (the React voice app) and `backend/` (the Python MCP server
+and app endpoints, deployed to Render; see [backend/README.md](backend/README.md)).
+The TypeScript server described below (`src/`) and the `MCP_Server/` stubs are earlier
+versions kept for reference; `backend/` replaces both.
+
+---
+
 This project contains the first backend slice of an accessible voice-banking prototype. It exposes a Model Context Protocol server that calls the Capital One Nessie simulation API. Nessie credentials stay in the server process and are never sent to the model or mobile client.
 
 ## Official API reference
