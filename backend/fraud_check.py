@@ -9,6 +9,7 @@ import uuid
 from datetime import datetime, timedelta
 
 from models import TransferRequest, UserHistory, FraudDecision, PastTransfer, TrustedContact, FamilyAlert
+from gemini_signals import scam_signals
 
 # PIN that releases a held transfer. Set RELEASE_PIN in .env; "1234" is the demo default.
 RELEASE_PIN = os.environ.get("RELEASE_PIN", "1234")
@@ -47,6 +48,7 @@ POINTS_MOST_OF_BALANCE = 20
 POINTS_SCAM_PHRASE = 30
 POINTS_URGENCY = 15
 POINTS_RAPID_TRANSFERS = 30
+POINTS_GEMINI_SCAM_STORY = 30
 
 # Score cutoffs for each decision.
 CONFIRM_AT = 30
@@ -118,6 +120,15 @@ def check_transfer(request: TransferRequest, history: UserHistory) -> FraudDecis
     if _count_recent_transfers(request, history) >= 2:
         risk_score += POINTS_RAPID_TRANSFERS
         reasons.append("You've made several transfers in just a few minutes")
+
+    # Rule 7: Gemini reads what they said for scam stories the word lists miss.
+    # Skipped if Rule 4 already caught a scam phrase, so the same thing isn't counted twice.
+    # Gemini only adds points. If it's unavailable, the rules above still decide.
+    if not scam_phrase:
+        signals = scam_signals(request.user_said)
+        if signals and (signals.impersonation or signals.unusual_payment):
+            risk_score += POINTS_GEMINI_SCAM_STORY
+            reasons.append("What you described sounds like a common scam")
 
     risk_score = min(risk_score, 100)
 
@@ -204,6 +215,9 @@ def is_cleared_to_send(transfer_id: str) -> bool:
 # ------------------------------------------------------------------
 if __name__ == "__main__":
     NOW = "2026-10-17T14:35:00"
+
+    # Tests never call the real Gemini. Rule 7 gets a stand-in further down.
+    scam_signals = lambda said: None
 
     def make_history(extra_transfers=None) -> UserHistory:
         """A pretend user: usually sends ~$100, has $3,000, pays her daughter and the electric company."""
@@ -317,4 +331,38 @@ if __name__ == "__main__":
     print(f"\n  Example alert: {alerts[-1].message}")
     print(f"  Example spoken message: {scam.spoken_message}")
 
-    print(f"\n{passed}/{len(tests) + len(hold_checks)} tests passed")
+    # Rule 7 tests: a bank-impersonation story with none of the listed scam words.
+    print("\nGemini tests:")
+    gemini_checks = []
+    from gemini_signals import ScamSignals
+
+    story = TransferRequest("grandma_checking", "new_account", 400.00,
+                            user_said="A man from my bank says my account was hacked and I need to move it to a new one",
+                            requested_at=NOW)
+
+    scam_signals = lambda said: None
+    without = check_transfer(story, make_history())
+    gemini_checks.append(("Without Gemini, the story only gets a confirm", without.decision == "confirm"))
+
+    scam_signals = lambda said: ScamSignals(impersonation=True, pressure=False, unusual_payment=True,
+                                            evidence=["A man from my bank says"])
+    with_gemini = check_transfer(story, make_history())
+    gemini_checks.append(("With Gemini, the same story is held", with_gemini.decision == "hold"))
+    gemini_checks.append(("The reason mentions a scam",
+                          "What you described sounds like a common scam" in with_gemini.reasons))
+
+    phrase_case = check_transfer(
+        TransferRequest("grandma_checking", "new_account", 400.00,
+                        user_said="Move it to a safe account", requested_at=NOW),
+        make_history(),
+    )
+    gemini_checks.append(("A listed scam phrase isn't counted twice",
+                          phrase_case.reasons.count("What you described sounds like a common scam") == 0))
+
+    for name, ok in gemini_checks:
+        passed += ok
+        print(f"{'PASS' if ok else 'FAIL'}  {name}")
+        if name.startswith("With Gemini"):
+            print(f"        score {without.risk_score} -> {with_gemini.risk_score}")
+
+    print(f"\n{passed}/{len(tests) + len(hold_checks) + len(gemini_checks)} tests passed")
