@@ -1,12 +1,25 @@
 # fraud_check.py
 # Checks every transfer before money moves.
 # Adds up points for warning signs, then decides: allow, confirm, or hold.
+# Held transfers alert the trusted contact and need a PIN to release.
 
+import os
 import re
 import uuid
 from datetime import datetime, timedelta
 
-from models import TransferRequest, UserHistory, FraudDecision, PastTransfer, TrustedContact
+from models import TransferRequest, UserHistory, FraudDecision, PastTransfer, TrustedContact, FamilyAlert
+
+# PIN that releases a held transfer. Set RELEASE_PIN in .env; "1234" is the demo default.
+RELEASE_PIN = os.environ.get("RELEASE_PIN", "1234")
+
+# Kept in memory for the hackathon. Resets when the server restarts.
+# transfer_id -> "allow", "confirm", "hold", or "released"
+TRANSFER_STATUS = {}
+# transfer_id -> the original TransferRequest, for held transfers
+HELD_TRANSFERS = {}
+# Every family alert sent, newest last
+ALERTS = []
 
 # Words and phrases to watch for in what the user said.
 SCAM_PHRASES = [
@@ -111,11 +124,17 @@ def check_transfer(request: TransferRequest, history: UserHistory) -> FraudDecis
     # Turn the score into a decision and a message for the voice agent.
     if risk_score >= HOLD_AT:
         decision = "hold"
+        HELD_TRANSFERS[transfer_id] = request
+        alert_line = ""
+        if history.trusted_contact:
+            send_family_alert(history.trusted_contact, request, reasons, transfer_id)
+            alert_line = f"I've also let {history.trusted_contact.name} know. "
         spoken_message = (
             "I've paused this transfer to keep your money safe. "
             + ". ".join(reasons)
             + ". Your bank will never ask you to move money to keep it safe. "
-            "If this is a mistake, you can release it with your PIN."
+            + alert_line
+            + "If this is a mistake, you can release it with your PIN."
         )
     elif risk_score >= CONFIRM_AT:
         decision = "confirm"
@@ -128,6 +147,8 @@ def check_transfer(request: TransferRequest, history: UserHistory) -> FraudDecis
         decision = "allow"
         spoken_message = "Okay. Please tap Confirm to send this transfer."
 
+    TRANSFER_STATUS[transfer_id] = decision
+
     return FraudDecision(
         decision=decision,
         risk_score=risk_score,
@@ -135,6 +156,47 @@ def check_transfer(request: TransferRequest, history: UserHistory) -> FraudDecis
         spoken_message=spoken_message,
         transfer_id=transfer_id,
     )
+
+
+def send_family_alert(contact: TrustedContact, request: TransferRequest, reasons: list, transfer_id: str) -> FamilyAlert:
+    """Create an alert for the trusted contact. The app shows it on their screen."""
+    alert = FamilyAlert(
+        transfer_id=transfer_id,
+        contact_name=contact.name,
+        contact_phone=contact.phone,
+        message=(
+            f"Hi {contact.name}, we paused a ${request.amount:,.2f} transfer from your "
+            f"family member's account because it looked like a scam: "
+            + "; ".join(reason.lower() for reason in reasons)
+            + ". Please give them a call."
+        ),
+        created_at=datetime.now().isoformat(timespec="seconds"),
+    )
+    ALERTS.append(alert)
+    return alert
+
+
+def get_alerts() -> list:
+    """All family alerts so far, newest last. The app calls this to show them."""
+    return list(ALERTS)
+
+
+def release_hold(transfer_id: str, pin: str) -> bool:
+    """Release a held transfer if the PIN is right. Returns True if released."""
+    if TRANSFER_STATUS.get(transfer_id) != "hold":
+        return False
+    if pin != RELEASE_PIN:
+        return False
+    TRANSFER_STATUS[transfer_id] = "released"
+    return True
+
+
+def is_cleared_to_send(transfer_id: str) -> bool:
+    """
+    The money-moving code (execute_transfer) MUST call this first.
+    Only transfers this file has checked and approved can be sent.
+    """
+    return TRANSFER_STATUS.get(transfer_id) in ("allow", "confirm", "released")
 
 
 # ------------------------------------------------------------------
@@ -216,4 +278,43 @@ if __name__ == "__main__":
         for reason in result.reasons:
             print(f"        - {reason}")
 
-    print(f"\n{passed}/{len(tests)} tests passed")
+    # Step 7 tests: holds, family alerts, and PIN release.
+    print("\nHold and alert tests:")
+    hold_checks = []
+
+    scam = check_transfer(
+        TransferRequest("grandma_checking", "scammer_account", 2000.00,
+                        user_said="Move it to a safe account right now", requested_at=NOW),
+        make_history(),
+    )
+    alerts = get_alerts()
+    hold_checks.append(("Held transfer creates a family alert",
+                        any(a.transfer_id == scam.transfer_id for a in alerts)))
+    hold_checks.append(("Alert is addressed to the daughter",
+                        alerts[-1].contact_name == "Maria (daughter)"))
+    hold_checks.append(("Spoken message says the contact was told",
+                        "Maria (daughter)" in scam.spoken_message))
+    hold_checks.append(("Held transfer is NOT cleared to send",
+                        not is_cleared_to_send(scam.transfer_id)))
+    hold_checks.append(("Wrong PIN does not release it",
+                        not release_hold(scam.transfer_id, "0000") and not is_cleared_to_send(scam.transfer_id)))
+    hold_checks.append(("Right PIN releases it",
+                        release_hold(scam.transfer_id, RELEASE_PIN) and is_cleared_to_send(scam.transfer_id)))
+
+    normal = check_transfer(
+        TransferRequest("grandma_checking", "electric_company", 85.00,
+                        user_said="Pay my electric bill", requested_at=NOW),
+        make_history(),
+    )
+    hold_checks.append(("Normal transfer is cleared to send", is_cleared_to_send(normal.transfer_id)))
+    hold_checks.append(("Normal transfer can't be 'released'", not release_hold(normal.transfer_id, RELEASE_PIN)))
+    hold_checks.append(("Unknown transfer is NOT cleared", not is_cleared_to_send("t_made_up")))
+
+    for name, ok in hold_checks:
+        passed += ok
+        print(f"{'PASS' if ok else 'FAIL'}  {name}")
+
+    print(f"\n  Example alert: {alerts[-1].message}")
+    print(f"  Example spoken message: {scam.spoken_message}")
+
+    print(f"\n{passed}/{len(tests) + len(hold_checks)} tests passed")
