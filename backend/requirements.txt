@@ -1,2 +1,6 @@
 google-genai
 pydantic
+httpx
+mcp
+fastapi
+uvicorn

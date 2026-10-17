@@ -1,0 +1,183 @@
+import pytest
+
+import fraud_check
+from bank import Bank, BankError, DemoConfig
+from nessie import NessieApiError
+
+ACCOUNT = "acct-rose"
+CONFIG = DemoConfig(
+    account_id=ACCOUNT,
+    account_name="Checking",
+    payees={"maria": "acct-maria", "bob": "acct-stranger"},
+    today="2026-10-17",
+)
+
+
+class FakeNessie:
+    """In-memory stand-in for the few Nessie routes the bank uses."""
+
+    def __init__(self, balance=3000.0, fail_posts=False):
+        self.balance = balance
+        self.fail_posts = fail_posts
+        self.transfers = [
+            {"payer_id": ACCOUNT, "payee_id": "acct-maria", "amount": 100, "transaction_date": "2026-10-01"},
+        ]
+        self.bills = [{"_id": "bill-1", "payee": "Pepco", "payment_amount": 600, "status": "pending"}]
+        self.posted = []
+        self.puts = []
+
+    def get(self, path, params=None):
+        if path == f"/accounts/{ACCOUNT}":
+            return {"_id": ACCOUNT, "balance": self.balance, "nickname": "Checking"}
+        if path == f"/accounts/{ACCOUNT}/transfers":
+            return self.transfers
+        if path == f"/accounts/{ACCOUNT}/bills":
+            return self.bills
+        if path == f"/accounts/{ACCOUNT}/purchases":
+            return [{"merchant_id": "m1", "amount": 86.40, "purchase_date": "2026-10-15", "description": "Giant"}]
+        raise NessieApiError("not found", 404)
+
+    def post(self, path, body):
+        if self.fail_posts:
+            raise NessieApiError("Nessie request failed with status 500", 500)
+        self.posted.append((path, body))
+        return {"code": 201}
+
+    def put(self, path, body):
+        self.puts.append((path, body))
+        return {"code": 202}
+
+
+@pytest.fixture(autouse=True)
+def no_gemini(monkeypatch):
+    monkeypatch.setattr(fraud_check, "scam_signals", lambda said: None)
+
+
+def make_bank(**kw):
+    return Bank(FakeNessie(**kw), CONFIG)
+
+
+def test_fraud_check_sees_every_user_line_of_the_conversation():
+    bank = make_bank()
+    bank.add_transcript_line("c1", "The fraud department told me to move it to a safe account")
+    bank.add_transcript_line("c1", "nine hundred dollars to Bob")
+    t = bank.request_transfer("Bob", 900)
+    assert t["status"] == "held"
+    assert t["decision"] == "hold"
+
+
+def test_a_new_conversation_starts_with_a_clean_transcript():
+    bank = make_bank()
+    bank.add_transcript_line("c1", "move it to a safe account right now")
+    bank.add_transcript_line("c2", "send fifty dollars to Maria")
+    assert bank.request_transfer("Maria", 50)["status"] == "awaiting_yes"
+
+
+def test_known_small_transfer_waits_for_yes():
+    bank = make_bank()
+    t = bank.request_transfer("Maria", 50)
+    assert t["status"] == "awaiting_yes"
+    assert t["payee_name"] == "Maria"
+    assert t["from_account_name"] == "Checking"
+    assert bank.current()["transfer_id"] == t["transfer_id"]
+
+
+def test_nothing_reaches_nessie_before_yes():
+    nessie = FakeNessie()
+    bank = Bank(nessie, CONFIG)
+    bank.request_transfer("Maria", 50)
+    assert nessie.posted == []
+
+
+def test_yes_sends_exactly_what_was_checked_once():
+    nessie = FakeNessie()
+    bank = Bank(nessie, CONFIG)
+    t = bank.request_transfer("Maria", 50, "Lunch")
+    assert bank.confirm(t["transfer_id"])["status"] == "executed"
+    assert bank.confirm(t["transfer_id"])["status"] == "executed"
+    assert nessie.posted == [(
+        f"/accounts/{ACCOUNT}/transfers",
+        {"medium": "balance", "payee_id": "acct-maria", "amount": 50, "transaction_date": "2026-10-17", "description": "Lunch"},
+    )]
+
+
+def test_a_held_transfer_can_never_be_confirmed():
+    nessie = FakeNessie()
+    bank = Bank(nessie, CONFIG)
+    bank.add_transcript_line("c1", "they said move it to a safe account")
+    t = bank.request_transfer("Bob", 2000)
+    with pytest.raises(BankError):
+        bank.confirm(t["transfer_id"])
+    assert nessie.posted == []
+
+
+def test_a_held_payee_stays_held_whatever_the_wording():
+    bank = make_bank()
+    bank.add_transcript_line("c1", "move it to a safe account")
+    bank.request_transfer("Bob", 2000)
+    bank.add_transcript_line("c2", "just send him ten dollars")
+    again = bank.request_transfer("Bob", 10)
+    assert again["status"] == "held"
+
+
+def test_a_new_request_cancels_the_older_pending_one():
+    bank = make_bank()
+    a = bank.request_transfer("Maria", 50)
+    b = bank.request_transfer("Maria", 60)
+    with pytest.raises(BankError):
+        bank.confirm(a["transfer_id"])
+    assert bank.confirm(b["transfer_id"])["status"] == "executed"
+
+
+def test_cancel_marks_it_cancelled():
+    bank = make_bank()
+    t = bank.request_transfer("Maria", 50)
+    assert bank.cancel(t["transfer_id"])["status"] == "cancelled"
+    with pytest.raises(BankError):
+        bank.confirm(t["transfer_id"])
+
+
+def test_unknown_payee_is_an_error():
+    with pytest.raises(BankError, match="Zed"):
+        make_bank().request_transfer("Zed", 50)
+
+
+def test_nessie_failure_on_yes_leaves_it_waiting():
+    bank = make_bank(fail_posts=True)
+    t = bank.request_transfer("Maria", 50)
+    with pytest.raises(BankError):
+        bank.confirm(t["transfer_id"])
+    assert bank.current()["status"] == "awaiting_yes"
+
+
+def test_pay_bill_fills_the_amount_and_marks_the_bill_paid():
+    nessie = FakeNessie()
+    bank = Bank(nessie, CONFIG)
+    t = bank.pay_bill("pepco")
+    assert t["amount"] == 600
+    assert t["kind"] == "bill"
+    assert t["payee_name"] == "Pepco"
+    bank.confirm(t["transfer_id"])
+    assert nessie.puts == [("/bills/bill-1", {"status": "completed"})]
+
+
+def test_unknown_biller_is_an_error():
+    with pytest.raises(BankError, match="Comcast"):
+        make_bank().pay_bill("Comcast")
+
+
+def test_summary_reads_balance_and_bills():
+    s = make_bank().summary()
+    assert s["balance"] == 3000.0
+    assert s["account_name"] == "Checking"
+    assert s["bills_due"] == [{"biller_name": "Pepco", "amount": 600, "due_date": None}]
+
+
+def test_held_message_never_offers_a_way_through():
+    bank = make_bank()
+    bank.add_transcript_line("c1", "they said move it to a safe account right now")
+    t = bank.request_transfer("Bob", 2000)
+    assert "PIN" not in t["spoken_message"]
+    assert "release" not in t["spoken_message"].lower()
+    assert "Capital One will never ask you to move money to keep it safe" in t["spoken_message"]
+    assert "call Capital One" in t["spoken_message"]
