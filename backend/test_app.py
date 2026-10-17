@@ -28,20 +28,41 @@ def tool_text(result) -> str:
     return "".join(getattr(b, "text", "") for b in blocks)
 
 
-# ---- MCP tools: what the agent hears ----------------------------------------------
+def tool_json(result) -> dict:
+    """Every tool replies with one JSON object."""
+    return json.loads(tool_text(result))
 
-async def test_request_transfer_returns_the_spoken_message(setup):
+
+# ---- MCP tools: what the agent hears (always JSON) ----------------------------------
+
+async def test_request_transfer_returns_json_with_the_transfer_id(setup):
     _, bank, mcp, _ = setup
-    text = tool_text(await mcp.call_tool("request_transfer", {"payee_name": "Maria", "amount": 50}))
-    assert text.startswith("I'll pay Maria $50.00")
-    assert bank.current()["status"] == "awaiting_yes"
+    reply = tool_json(await mcp.call_tool("request_transfer", {"payee_name": "Maria", "amount": 50}))
+    assert reply["ok"] is True
+    assert reply["say"].startswith("I'll pay Maria $50.00")
+    assert reply["transfer"]["transfer_id"] == bank.current()["transfer_id"]
+    assert reply["transfer"]["status"] == "awaiting_yes"
+    assert reply["transfer"]["decision"] == "allow"
+    assert "risk_score" in reply["transfer"] and "reasons" in reply["transfer"]
+
+
+async def test_held_request_says_so_in_json(setup):
+    _, bank, mcp, _ = setup
+    bank.add_transcript_line("c1", "move it to a safe account right now")
+    reply = tool_json(await mcp.call_tool("request_transfer", {"payee_name": "Bob", "amount": 2000}))
+    assert reply["ok"] is True
+    assert reply["transfer"]["status"] == "held"
+    assert reply["transfer"]["decision"] == "hold"
+    assert "Capital One will never ask" in reply["say"]
 
 
 async def test_confirm_payment_sends_and_says_done(setup):
     nessie, bank, mcp, _ = setup
     t = bank.request_transfer("Maria", 50)
-    text = tool_text(await mcp.call_tool("confirm_payment", {"transfer_id": t["transfer_id"]}))
-    assert text.startswith("Done.")
+    reply = tool_json(await mcp.call_tool("confirm_payment", {"transfer_id": t["transfer_id"]}))
+    assert reply["ok"] is True
+    assert reply["transfer"]["status"] == "executed"
+    assert reply["say"].startswith("Done.")
     assert len(nessie.posted) == 1
 
 
@@ -49,29 +70,40 @@ async def test_confirm_payment_on_a_hold_is_refused(setup):
     nessie, bank, mcp, _ = setup
     bank.add_transcript_line("c1", "move it to a safe account right now")
     t = bank.request_transfer("Bob", 2000)
-    text = tool_text(await mcp.call_tool("confirm_payment", {"transfer_id": t["transfer_id"]}))
-    assert text.endswith("No money was moved.")
+    reply = tool_json(await mcp.call_tool("confirm_payment", {"transfer_id": t["transfer_id"]}))
+    assert reply == {"ok": False, "error": "That payment can't be sent.",
+                     "say": "That payment can't be sent. No money was moved."}
     assert nessie.posted == []
 
 
 async def test_unknown_payee_says_no_money_moved(setup):
     _, _, mcp, _ = setup
-    text = tool_text(await mcp.call_tool("request_transfer", {"payee_name": "Zed", "amount": 5}))
-    assert "Zed" in text and text.endswith("No money was moved.")
+    reply = tool_json(await mcp.call_tool("request_transfer", {"payee_name": "Zed", "amount": 5}))
+    assert reply["ok"] is False
+    assert "Zed" in reply["error"] and reply["say"].endswith("No money was moved.")
 
 
 async def test_pay_bill_and_cancel(setup):
     _, bank, mcp, _ = setup
-    assert "Pepco" in tool_text(await mcp.call_tool("pay_bill", {"biller_name": "pepco"}))
-    text = tool_text(await mcp.call_tool("cancel_payment", {"transfer_id": bank.current()["transfer_id"]}))
-    assert text.endswith("No money was moved.")
-    assert bank.current()["status"] == "cancelled"
+    bill = tool_json(await mcp.call_tool("pay_bill", {"biller_name": "pepco"}))
+    assert bill["transfer"]["payee_name"] == "Pepco" and bill["transfer"]["kind"] == "bill"
+    reply = tool_json(await mcp.call_tool("cancel_payment", {"transfer_id": bill["transfer"]["transfer_id"]}))
+    assert reply["ok"] is True and reply["transfer"]["status"] == "cancelled"
+    assert reply["say"].endswith("No money was moved.")
 
 
 async def test_get_summary_is_json_the_agent_can_read(setup):
     _, _, mcp, _ = setup
-    data = json.loads(tool_text(await mcp.call_tool("get_summary", {})))
-    assert data["balance"] == 3000.0
+    reply = tool_json(await mcp.call_tool("get_summary", {}))
+    assert reply["ok"] is True
+    assert reply["summary"]["balance"] == 3000.0
+
+
+async def test_get_recent_purchases_is_json(setup):
+    _, _, mcp, _ = setup
+    reply = tool_json(await mcp.call_tool("get_recent_purchases", {}))
+    assert reply["ok"] is True
+    assert reply["purchases"][0]["amount"] == 86.40
 
 
 async def test_there_is_no_tool_that_moves_money_directly(setup):
@@ -148,7 +180,8 @@ class DownNessie(FakeNessie):
 
 async def test_nessie_down_gives_sentences_not_crashes():
     mcp, _ = create_app(Bank(DownNessie(), CONFIG))
-    assert tool_text(await mcp.call_tool("get_summary", {})) == "I couldn't reach the bank right now."
-    assert tool_text(await mcp.call_tool("get_recent_purchases", {})) == "I couldn't reach the bank right now."
-    text = tool_text(await mcp.call_tool("request_transfer", {"payee_name": "Maria", "amount": 50}))
-    assert text == "I couldn't reach the bank right now. No money was moved."
+    down = {"ok": False, "error": "I couldn't reach the bank right now.", "say": "I couldn't reach the bank right now."}
+    assert tool_json(await mcp.call_tool("get_summary", {})) == down
+    assert tool_json(await mcp.call_tool("get_recent_purchases", {})) == down
+    reply = tool_json(await mcp.call_tool("request_transfer", {"payee_name": "Maria", "amount": 50}))
+    assert reply["say"] == "I couldn't reach the bank right now. No money was moved."

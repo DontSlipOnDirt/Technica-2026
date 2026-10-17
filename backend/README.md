@@ -23,7 +23,17 @@ This replaces the TypeScript stdio server on the `nessie-mcp` branch. ElevenLabs
 
 `get_summary`, `get_recent_purchases`, `request_transfer(payee_name, amount, memo)`, `pay_bill(biller_name, amount?)`, `confirm_payment(transfer_id)`, `cancel_payment(transfer_id)`.
 
-Every tool returns a sentence or JSON the agent can read aloud. Failures end with "No money was moved."
+Every tool replies with one JSON object:
+
+```json
+{"ok": true, "say": "I'll pay Maria $50.00 from your checking account. Are you sure?",
+ "transfer": {"transfer_id": "t_1a2b3c4d", "kind": "transfer", "status": "awaiting_yes",
+              "decision": "allow", "risk_score": 0, "reasons": [], "payee_name": "Maria",
+              "amount": 50.0, "from_account_name": "Checking", "spoken_message": "..."}}
+{"ok": false, "error": "That payment can't be sent.", "say": "That payment can't be sent. No money was moved."}
+```
+
+The agent reads `say` aloud and passes `transfer.transfer_id` to `confirm_payment` or `cancel_payment`. Read tools return `summary` or `purchases` in place of `transfer`.
 
 ## App endpoints (for the screen)
 
