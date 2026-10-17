@@ -110,7 +110,7 @@ def test_no_memo_still_records_who_it_went_to():
     nessie = FakeNessie()
     bank = Bank(nessie, CONFIG)
     bank.confirm(bank.request_transfer("Maria", 50)["transfer_id"])
-    assert nessie.posted[0][1]["description"] == "To Maria [payee:acct-maria]"
+    assert nessie.posted[0][1]["description"] == "Transfer to Maria [payee:acct-maria]"
 
 
 def test_history_reads_the_payee_from_the_description():

@@ -55,20 +55,6 @@ def _as_datetime(date: str) -> str:
     return date if "T" in date else f"{date}T00:00:00"
 
 
-# This event's Nessie rejects "payee_id" and "medium" on transfers and requires "status",
-# so a transfer doesn't record who got the money. Like the team's seed data, we write the
-# recipient into the description as "[payee:<account id>]" and read it back from there.
-_PAYEE_TAG = re.compile(r"\[payee:([^\]]+)\]")
-
-
-def _payee_of(transfer: Dict[str, Any]) -> Optional[str]:
-    """Who a Nessie transfer went to: payee_id if Nessie has it, else the [payee:...] tag."""
-    if transfer.get("payee_id"):
-        return transfer["payee_id"]
-    match = _PAYEE_TAG.search(str(transfer.get("description", "")))
-    return match.group(1) if match else None
-
-
 class Bank:
     def __init__(self, nessie, config: DemoConfig):
         self._nessie = nessie
