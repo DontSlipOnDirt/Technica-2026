@@ -41,13 +41,13 @@ def test_nessie_error_message_is_kept_as_detail():
     assert "validation" not in str(err.value)
 
 
-def test_non_json_error_bodies_give_no_detail():
+def test_other_error_bodies_become_detail_without_the_key():
     def handler(request):
-        return httpx.Response(502, text="<html>bad gateway</html>")
+        return httpx.Response(400, text="bad transaction_date for key=test-key")
 
     with pytest.raises(NessieApiError) as err:
         client_with(handler).get("/accounts/a1")
-    assert err.value.detail == ""
+    assert err.value.detail == "bad transaction_date for key=***"
 
 
 def test_post_sends_json():

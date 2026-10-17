@@ -27,19 +27,21 @@ class NessieApiError(Exception):
         self.detail = detail
 
 
-def _error_detail(response: httpx.Response) -> str:
-    """Nessie errors look like {"code": 400, "message": "...", "culprit": [...]}."""
+def _error_detail(response: httpx.Response, api_key: str) -> str:
+    """Nessie errors usually look like {"code": 400, "message": "...", "culprit": [...]};
+    anything else is kept as raw text. The API key is blanked out either way."""
     try:
         body = response.json()
     except ValueError:
-        return ""
-    if not isinstance(body, dict):
-        return ""
-    detail = str(body.get("message") or "")
-    culprit = body.get("culprit")
-    if culprit:
-        detail += f" ({'; '.join(map(str, culprit)) if isinstance(culprit, list) else culprit})"
-    return detail[:300]
+        body = None
+    if isinstance(body, dict) and body.get("message"):
+        detail = str(body["message"])
+        culprit = body.get("culprit")
+        if culprit:
+            detail += f" ({'; '.join(map(str, culprit)) if isinstance(culprit, list) else culprit})"
+    else:
+        detail = response.text.strip()
+    return detail.replace(api_key, "***")[:300]
 
 
 class NessieClient:
@@ -78,7 +80,7 @@ class NessieClient:
 
         if response.status_code >= 400:
             raise NessieApiError(f"Nessie request failed with status {response.status_code}", response.status_code,
-                                 _error_detail(response))
+                                 _error_detail(response, self._api_key))
         if not response.content:
             return None
         try:
