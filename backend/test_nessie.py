@@ -61,3 +61,14 @@ def test_params_are_passed_through():
 
     client_with(handler).get("/merchants", params={"name": "Giant"})
     assert "name=Giant" in seen["url"] and "key=test-key" in seen["url"]
+
+
+def test_the_api_key_never_reaches_the_logs(caplog):
+    import logging
+    caplog.set_level(logging.DEBUG)
+
+    def handler(request):
+        return httpx.Response(200, json={})
+
+    client_with(handler).get("/accounts/a1")
+    assert "test-key" not in caplog.text

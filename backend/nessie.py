@@ -3,12 +3,18 @@
 # Ported from Jacob's TypeScript nessie-mcp branch (src/nessie.ts).
 # The API key stays on the server; it's added to every request as ?key=...
 
+import logging
 import os
 from typing import Any, Optional
 
 import httpx
 
 DEFAULT_BASE_URL = "https://api.nessieisreal.com"
+
+# httpx logs every request URL at INFO, and Nessie puts the API key in the URL.
+# Keep those logs off so the key never lands in Render's logs.
+for _name in ("httpx", "httpcore"):
+    logging.getLogger(_name).setLevel(logging.WARNING)
 
 
 class NessieApiError(Exception):
