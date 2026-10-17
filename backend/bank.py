@@ -5,6 +5,7 @@
 # A held transfer can never reach Nessie, and nothing moves money without a confirm.
 
 import logging
+import re
 import threading
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -34,6 +35,20 @@ class DemoConfig:
 def _as_datetime(date: str) -> str:
     """Nessie dates are "2026-10-17"; the fraud check wants "2026-10-17T00:00:00"."""
     return date if "T" in date else f"{date}T00:00:00"
+
+
+# This event's Nessie rejects "payee_id" and "medium" on transfers and requires "status",
+# so a transfer doesn't record who got the money. Like the team's seed data, we write the
+# recipient into the description as "[payee:<account id>]" and read it back from there.
+_PAYEE_TAG = re.compile(r"\[payee:([^\]]+)\]")
+
+
+def _payee_of(transfer: Dict[str, Any]) -> Optional[str]:
+    """Who a Nessie transfer went to: payee_id if Nessie has it, else the [payee:...] tag."""
+    if transfer.get("payee_id"):
+        return transfer["payee_id"]
+    match = _PAYEE_TAG.search(str(transfer.get("description", "")))
+    return match.group(1) if match else None
 
 
 class Bank:
@@ -147,14 +162,13 @@ class Bank:
                 if t["kind"] == "bill":
                     self._nessie.put(f"/bills/{private['bill_id']}", {"status": "completed"})
                 else:
+                    note = private["memo"] or f"To {t['payee_name']}"
                     body = {
-                        "medium": "balance",
-                        "payee_id": private["payee_id"],
+                        "status": "completed",
                         "amount": t["amount"],
                         "transaction_date": self._today(),
+                        "description": f"{note} [payee:{private['payee_id']}]",
                     }
-                    if private["memo"]:
-                        body["description"] = private["memo"]
                     self._nessie.post(f"/accounts/{self._config.account_id}/transfers", body)
             except NessieApiError as err:
                 log.warning("Nessie payment for %s failed with status %s", transfer_id, err.status)
@@ -220,17 +234,20 @@ class Bank:
     def _history(self) -> UserHistory:
         account_id = self._config.account_id
         account = self._get(f"/accounts/{account_id}") or {}
+        # Only transfers she sent where we can tell who got the money. That also skips
+        # test transfers someone left in Nessie, which would drag her "usual amount" down.
         transfers = [t for t in (self._get(f"/accounts/{account_id}/transfers") or [])
-                     if t.get("payer_id", account_id) == account_id]
+                     if t.get("payer_id", account_id) == account_id
+                     and t.get("status") != "cancelled" and _payee_of(t)]
         bills = self._get(f"/accounts/{account_id}/bills") or []
         amounts = [float(t.get("amount", 0)) for t in transfers]
         return UserHistory(
-            known_payees=[t.get("payee_id") for t in transfers] +
+            known_payees=[_payee_of(t) for t in transfers] +
                          [f"biller:{str(b.get('payee', '')).lower()}" for b in bills],
             average_transfer=sum(amounts) / len(amounts) if amounts else 0.0,
             current_balance=float(account.get("balance", 0)),
             recent_transfers=[
-                PastTransfer(to_account_id=t.get("payee_id", ""), amount=float(t.get("amount", 0)),
+                PastTransfer(to_account_id=_payee_of(t), amount=float(t.get("amount", 0)),
                              made_at=_as_datetime(t.get("transaction_date", self._today())))
                 for t in transfers[-20:]
             ],
