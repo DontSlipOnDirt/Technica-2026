@@ -5,6 +5,11 @@ and app endpoints, deployed to Render; see [backend/README.md](backend/README.md
 The TypeScript server described below (`src/`) and the `MCP_Server/` stubs are earlier
 versions kept for reference; `backend/` replaces both.
 
+The ElevenLabs agent's system prompt is versioned in [docs/elevenlabs-agent-prompt.md](docs/elevenlabs-agent-prompt.md).
+The live agent uses its published ElevenLabs dashboard configuration; this Markdown file is a
+reference copy and is not loaded automatically by the frontend or backend. Apply prompt changes
+in ElevenLabs and publish the agent for new conversations to use them.
+
 ---
 
 This project contains the first backend slice of an accessible voice-banking prototype. It exposes a Model Context Protocol server that calls the Capital One Nessie simulation API. Nessie credentials stay in the server process and are never sent to the model or mobile client.
