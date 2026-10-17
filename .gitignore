@@ -223,3 +223,6 @@ __marimo__/
 nessie-bruno/
 nessie-peek.mjs
 nessie.mjs
+
+# Brainstorm mockups (local only)
+.superpowers/
