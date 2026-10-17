@@ -33,6 +33,11 @@ def fake_client(monkeypatch):
     return install
 
 
+def test_timeout_meets_geminis_10_second_minimum():
+    # Gemini rejects any deadline under 10s with 400 INVALID_ARGUMENT.
+    assert gemini_signals.TIMEOUT_MS >= 10_000
+
+
 def test_missing_key_is_logged_once(monkeypatch, caplog):
     monkeypatch.delenv("GEMINI_API_KEY", raising=False)
     monkeypatch.setattr(gemini_signals, "_warned_no_key", False)

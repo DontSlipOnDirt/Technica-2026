@@ -15,8 +15,9 @@ GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-flash-latest")
 log = logging.getLogger("gemini")
 _warned_no_key = False
 
-# Give up after this long so a slow Gemini never holds up a transfer.
-TIMEOUT_MS = 3000
+# Give up after this long so a slow Gemini never holds up a transfer for good.
+# 10s is the shortest deadline Gemini accepts; anything lower fails every call.
+TIMEOUT_MS = 10_000
 
 PROMPT = """You check what a bank customer said for signs that a scammer is coaching them.
 Common signs: someone pretending to be the bank, IRS, police, or "fraud department";
