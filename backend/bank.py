@@ -175,7 +175,7 @@ class Bank:
                         body["description"] = private["memo"]
                     self._nessie.post(f"/accounts/{self._config.account_id}/transfers", body)
             except NessieApiError as err:
-                log.warning("Nessie payment for %s failed with status %s", transfer_id, err.status)
+                log.warning("Nessie payment for %s failed with status %s: %s", transfer_id, err.status, err.detail)
                 raise BankError("I couldn't complete that payment.")
             t["status"] = "executed"
             return dict(t)
@@ -224,7 +224,7 @@ class Bank:
             return self._nessie.get(path)
         except NessieApiError as err:
             # Path and status only; the API key never reaches the logs.
-            log.warning("Nessie GET %s failed with status %s", path, err.status)
+            log.warning("Nessie GET %s failed with status %s: %s", path, err.status, err.detail)
             raise BankError("I couldn't reach the bank right now.")
 
     def _find_bill(self, biller_name: str) -> Optional[Dict[str, Any]]:

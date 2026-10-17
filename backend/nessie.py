@@ -18,11 +18,28 @@ for _name in ("httpx", "httpcore"):
 
 
 class NessieApiError(Exception):
-    """A Nessie request failed. The message never includes Nessie's response body."""
+    """A Nessie request failed. The message never includes Nessie's response body.
+    detail holds only Nessie's own JSON "message"/"culprit", for the server logs."""
 
-    def __init__(self, message: str, status: int):
+    def __init__(self, message: str, status: int, detail: str = ""):
         super().__init__(message)
         self.status = status
+        self.detail = detail
+
+
+def _error_detail(response: httpx.Response) -> str:
+    """Nessie errors look like {"code": 400, "message": "...", "culprit": [...]}."""
+    try:
+        body = response.json()
+    except ValueError:
+        return ""
+    if not isinstance(body, dict):
+        return ""
+    detail = str(body.get("message") or "")
+    culprit = body.get("culprit")
+    if culprit:
+        detail += f" ({'; '.join(map(str, culprit)) if isinstance(culprit, list) else culprit})"
+    return detail[:300]
 
 
 class NessieClient:
@@ -60,7 +77,8 @@ class NessieClient:
             raise NessieApiError("Couldn't reach Nessie", 503)
 
         if response.status_code >= 400:
-            raise NessieApiError(f"Nessie request failed with status {response.status_code}", response.status_code)
+            raise NessieApiError(f"Nessie request failed with status {response.status_code}", response.status_code,
+                                 _error_detail(response))
         if not response.content:
             return None
         try:
