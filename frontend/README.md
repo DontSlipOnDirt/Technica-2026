@@ -22,8 +22,11 @@ agent requires a backend-issued conversation token. Never put an ElevenLabs API 
 `VITE_USE_FAKE_API=true` keeps banking endpoints in demo mode even with a live voice agent.
 For backend integration, set it to `false`, set `VITE_API_BASE` to the backend URL, and
 configure the agent's MCP server to use that same backend's public `/mcp` endpoint.
-For deployment, set these environment variables in the frontend hosting project's build
-configuration. Restart Vite or rebuild after changing them.
+Production builds load `.env.production`, which contains only the public agent ID,
+the Render backend URL, and `VITE_USE_FAKE_API=false`. Keep these defaults in the repo
+so moving hosting accounts does not silently switch the app into demo mode. Hosting
+environment variables can override them; remove stale demo values from the new project.
+Never add secret keys to this file. Restart Vite or rebuild after changing configuration.
 
 Run `npm test`, `npm run build`, and `npm run lint` to verify changes.
 
