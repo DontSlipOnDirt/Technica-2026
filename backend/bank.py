@@ -4,6 +4,7 @@
 #   request -> fraud check on her real words -> waits for a yes -> Nessie
 # A held transfer can never reach Nessie, and nothing moves money without a confirm.
 
+import logging
 import threading
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -12,6 +13,9 @@ from typing import Any, Dict, List, Optional
 import fraud_check
 from models import PastTransfer, TransferRequest, TrustedContact, UserHistory
 from nessie import NessieApiError
+
+
+log = logging.getLogger("bank")
 
 
 class BankError(Exception):
@@ -152,7 +156,8 @@ class Bank:
                     if private["memo"]:
                         body["description"] = private["memo"]
                     self._nessie.post(f"/accounts/{self._config.account_id}/transfers", body)
-            except NessieApiError:
+            except NessieApiError as err:
+                log.warning("Nessie payment for %s failed with status %s", transfer_id, err.status)
                 raise BankError("I couldn't complete that payment.")
             t["status"] = "executed"
             return dict(t)
@@ -199,7 +204,9 @@ class Bank:
     def _get(self, path: str) -> Any:
         try:
             return self._nessie.get(path)
-        except NessieApiError:
+        except NessieApiError as err:
+            # Path and status only; the API key never reaches the logs.
+            log.warning("Nessie GET %s failed with status %s", path, err.status)
             raise BankError("I couldn't reach the bank right now.")
 
     def _find_bill(self, biller_name: str) -> Optional[Dict[str, Any]]:
