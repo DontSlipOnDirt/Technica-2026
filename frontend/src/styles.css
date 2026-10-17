@@ -1,0 +1,235 @@
+:root {
+  --navy: #013d5b;
+  --red: #d03027;
+  --green: #1f8a3b;
+  --warn-bg: #fff6dd;
+  --warn-border: #f2a900;
+  --warn-text: #6b4a00;
+  --sent-bg: #e6f4ea;
+  --sent-text: #136c2e;
+  --scam-bg: #fde8e7;
+  --text: #111;
+  --muted: #555;
+  --chat-bg: #f5f6f8;
+  --line: #e3e3e3;
+  font-family: Optimist, "Helvetica Neue", Helvetica, Arial, sans-serif;
+  color: var(--text);
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  background: #fff;
+}
+
+.screen {
+  display: flex;
+  flex-direction: column;
+  height: 100dvh;
+  max-width: 480px;
+  margin: 0 auto;
+  background: #fff;
+}
+
+.screen__header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 16px 16px 4px;
+}
+
+.screen__logo { height: 28px; }
+.screen__label { color: #666; font-size: 16px; }
+
+.screen__mic {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 16px 0 8px;
+}
+
+.screen__status {
+  margin: 10px 0 0;
+  font-size: 17px;
+  color: var(--muted);
+}
+
+.screen--blocked .screen__status {
+  color: var(--red);
+  font-weight: 600;
+}
+
+/* Mic orb */
+.orb {
+  position: relative;
+  width: 120px;
+  height: 120px;
+  border: 0;
+  padding: 0;
+  background: none;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.orb:focus-visible { outline: 3px solid var(--navy); outline-offset: 4px; border-radius: 50%; }
+
+.orb__ring {
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  border: 3px solid #4285f4;
+  opacity: 0;
+}
+
+.orb--active .orb__ring { animation: pulse 1.6s ease-out infinite; }
+.orb--active .orb__ring--2 { animation-delay: .5s; border-color: #34a853; }
+.orb--active .orb__ring--3 { animation-delay: 1s; border-color: #fbbc05; }
+
+@keyframes pulse {
+  0% { transform: scale(.75); opacity: .9; }
+  100% { transform: scale(1.25); opacity: 0; }
+}
+
+.orb__core {
+  position: relative;
+  width: 80px;
+  height: 80px;
+  border-radius: 50%;
+  background: var(--navy);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.orb__core svg { width: 36px; height: 36px; fill: #fff; }
+
+.orb--blocked .orb__core { background: var(--red); }
+.orb--blocked .orb__ring { animation: none; opacity: .35; border-color: var(--red); transform: scale(1.1); }
+.orb--blocked .orb__ring--2, .orb--blocked .orb__ring--3 { opacity: 0; }
+
+@media (prefers-reduced-motion: reduce) {
+  .orb--active .orb__ring { animation: none; opacity: .5; }
+}
+
+/* Are you sure? */
+.confirm { padding: 4px 16px 12px; text-align: center; }
+
+.confirm__question {
+  margin: 4px 0 8px;
+  font-size: 22px;
+  font-weight: 600;
+  line-height: 1.3;
+}
+
+.confirm__warning {
+  list-style: none;
+  margin: 0 0 12px;
+  padding: 8px 12px;
+  text-align: left;
+  font-size: 15px;
+  color: var(--warn-text);
+  background: var(--warn-bg);
+  border-left: 4px solid var(--warn-border);
+  border-radius: 4px;
+}
+
+.confirm__buttons { display: flex; flex-direction: column; gap: 10px; }
+
+.btn {
+  height: 56px;
+  border: 0;
+  border-radius: 4px;
+  color: #fff;
+  font: inherit;
+  font-size: 20px;
+  font-weight: 600;
+  letter-spacing: .2px;
+  cursor: pointer;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, .18);
+}
+
+.btn:disabled { opacity: .6; cursor: default; }
+.btn:focus-visible { outline: 3px solid var(--navy); outline-offset: 2px; }
+.btn--yes { background: var(--green); }
+.btn--no { background: var(--red); }
+
+/* Sent */
+.sent {
+  margin: 4px 16px 12px;
+  padding: 14px;
+  text-align: center;
+  font-size: 18px;
+  font-weight: 600;
+  color: var(--sent-text);
+  background: var(--sent-bg);
+  border: 2px solid var(--green);
+  border-radius: 12px;
+}
+
+/* Scam caught */
+.scam {
+  margin: 4px 16px 12px;
+  padding: 14px 16px;
+  background: var(--scam-bg);
+  border: 2px solid var(--red);
+  border-radius: 12px;
+  font-size: 16px;
+  line-height: 1.4;
+}
+
+.scam__title { margin: 0 0 6px; font-size: 20px; color: #b3261e; }
+.scam p { margin: 0 0 6px; }
+.scam__reasons { margin: 0 0 10px; padding-left: 20px; font-size: 15px; }
+
+.scam__call {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 12px;
+  border-radius: 4px;
+  background: #b3261e;
+  color: #fff;
+  font-size: 18px;
+  font-weight: 700;
+  text-decoration: none;
+}
+
+.scam__phone { font-weight: 400; font-size: 16px; }
+
+/* Chat */
+.chat {
+  flex: 1;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px 16px;
+  background: var(--chat-bg);
+  border-top: 1px solid var(--line);
+}
+
+.chat__msg {
+  max-width: 82%;
+  margin: 0;
+  padding: 10px 14px;
+  border-radius: 16px;
+  font-size: 17px;
+  line-height: 1.35;
+}
+
+.chat__msg--user {
+  align-self: flex-end;
+  background: var(--navy);
+  color: #fff;
+  border-bottom-right-radius: 4px;
+}
+
+.chat__msg--agent {
+  align-self: flex-start;
+  background: #fff;
+  border: 1px solid #ddd;
+  border-bottom-left-radius: 4px;
+}
