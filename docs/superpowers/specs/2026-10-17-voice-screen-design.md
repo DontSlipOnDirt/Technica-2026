@@ -48,7 +48,7 @@ Common to all looks, top to bottom:
 ### 1. Talking
 - Idle: the circle is still. Tapping it starts the voice session.
 - Listening/speaking: colored rings pulse around the navy mic.
-- Tapping the circle while she is talking ends her turn immediately. Otherwise ElevenLabs decides when her turn is over.
+- Tapping the circle while she is talking ends her turn. Otherwise ElevenLabs decides when her turn is over. If the SDK has no way to force the turn to end, tapping mutes the mic, which ElevenLabs then treats as silence; that is acceptable.
 - Read-only answers just appear in the chat and are spoken.
 
 ### 2. Are you sure?
@@ -68,6 +68,12 @@ Common to all looks, top to bottom:
 - Red-bordered box: "This looks like a scam", "We stopped your $X transfer. Your money has not moved.", the fraud check's reasons as bullets, and a large **Call Capital One** button (`tel:` link) with the number. Use Capital One's real customer service number from capitalone.com; the mockup used a placeholder.
 - The agent reads the fraud check's `spoken_message` word for word.
 - There is no button, voice command, or retry that releases it.
+- **The conversation stays open.** She can keep asking questions (balance, spending). The red box stays until she starts a different request.
+- **No amount of reasoning with the agent unblocks it.** This is enforced by the system, not by the agent's good behavior:
+  - A held `transfer_id` can never be confirmed; the backend rejects it.
+  - If she (or a scammer coaching her) asks again — "send it anyway", "it's fine, I know them", a smaller amount, a different wording — the agent can only call `request_transfer` again, which runs the fraud check again on **all** of her words in the session, so the scam story is still there.
+  - Once a payee has been held in a session, every further request to that payee in the same session is held automatically, whatever the amount or wording.
+  - Agent prompt (voice teammate): after a hold, don't argue, don't offer workarounds, repeat that Capital One will never ask her to move money to keep it safe, and point to the Call Capital One button.
 
 ### Failures
 - Any failure (backend down, Nessie error, insufficient funds, payee not found) shows a chat message ending in the standard sentence **"No money was moved."**
@@ -116,5 +122,5 @@ Owned by teammates; listed so the app and backend agree. All JSON is snake_case,
 ## Open items to confirm with teammates
 
 - Voice teammate: tool names/params above, blocking client tools, Gemini as the LLM, public agent, "patient" turn setting, system prompt lines (read `spoken_message` verbatim; never say "sent" until told it executed; ask "anything else?" and end the call on no).
-- Fraud teammate: drop PIN release; add `confirmed`/`executed`/`cancelled` statuses and store the full request with the `transfer_id`; note that a $600 Pepco bill currently scores 25 → `allow` (no warning) because rules use overall average, not per-payee.
+- Fraud teammate: hold every later request to a payee that was already held in the session; drop PIN release; add `confirmed`/`executed`/`cancelled` statuses and store the full request with the `transfer_id`; note that a $600 Pepco bill currently scores 25 → `allow` (no warning) because rules use overall average, not per-payee.
 - Backend owner (unassigned): the endpoints above, CORS for the app, payee-name lookup.
