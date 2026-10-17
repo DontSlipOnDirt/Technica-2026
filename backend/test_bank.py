@@ -2,6 +2,7 @@ import pytest
 
 import fraud_check
 from bank import Bank, BankError, DemoConfig
+from gemini_signals import GeminiUnavailable
 from nessie import NessieApiError
 
 ACCOUNT = "acct-rose"
@@ -28,7 +29,10 @@ class FakeNessie:
 
     def get(self, path, params=None):
         if path == f"/accounts/{ACCOUNT}":
-            return {"_id": ACCOUNT, "balance": self.balance, "nickname": "Checking"}
+            return {"_id": ACCOUNT, "balance": self.balance, "nickname": "Checking", "customer_id": "cust-rose"}
+        if path == "/customers/cust-rose/accounts":
+            return [{"_id": ACCOUNT, "type": "Checking", "nickname": "Checking", "balance": self.balance},
+                    {"_id": "acct-rose-savings", "type": "Savings", "nickname": "Rainy day", "balance": 9000}]
         if path == f"/accounts/{ACCOUNT}/transfers":
             return self.transfers
         if path == f"/accounts/{ACCOUNT}/bills":
@@ -97,7 +101,7 @@ def test_yes_sends_exactly_what_was_checked_once():
     assert bank.confirm(t["transfer_id"])["status"] == "executed"
     assert nessie.posted == [(
         f"/accounts/{ACCOUNT}/transfers",
-        {"status": "completed", "amount": 50, "transaction_date": "2026-10-17",
+        {"transaction_date": "2026-10-17", "status": "completed", "amount": 50,
          "description": "Lunch [payee:acct-maria]"},
     )]
 
@@ -211,3 +215,127 @@ def test_held_message_never_offers_a_way_through():
     assert "release" not in t["spoken_message"].lower()
     assert "Capital One will never ask you to move money to keep it safe" in t["spoken_message"]
     assert "call Capital One" in t["spoken_message"]
+
+
+class SeededNessie(FakeNessie):
+    """Shapes from the team's real seed: payee only in a [payee:...] tag, tags in descriptions."""
+
+    def __init__(self):
+        super().__init__()
+        self.transfers = [{"id": "x1", "amount": 50, "transaction_date": "2026-10-02", "status": "completed",
+                           "description": "To Ana [payee:acct-maria]"}]
+
+    def get(self, path, params=None):
+        if path == f"/accounts/{ACCOUNT}/purchases":
+            return [{"amount": 19, "purchase_date": "2026-10-15",
+                     "description": "Corner Cafe [merchant:m1][cat:Restaurant]"}]
+        return super().get(path, params)
+
+
+def test_a_payee_tag_in_the_description_counts_as_a_known_payee():
+    t = Bank(SeededNessie(), CONFIG).request_transfer("Maria", 50)
+    assert t["risk_score"] == 0, t["reasons"]
+
+
+def test_purchase_descriptions_drop_the_seed_tags():
+    p = Bank(SeededNessie(), CONFIG).recent_purchases(1)
+    assert p[0]["description"] == "Corner Cafe"
+
+
+# ---- Accounts, deposits, withdrawals ------------------------------------------------
+
+def test_list_accounts_names_every_account_without_ids():
+    accounts = make_bank().list_accounts()
+    assert accounts == [
+        {"name": "Checking", "type": "Checking", "balance": 3000.0},
+        {"name": "Rainy day", "type": "Savings", "balance": 9000},
+    ]
+
+
+def test_withdrawal_waits_for_a_yes_then_posts_once():
+    nessie = FakeNessie()
+    bank = Bank(nessie, CONFIG)
+    t = bank.withdraw(40)
+    assert t["kind"] == "withdrawal" and t["status"] == "awaiting_yes"
+    assert t["spoken_message"].startswith("I'll take $40.00 out of your checking account")
+    assert nessie.posted == []
+    bank.confirm(t["transfer_id"])
+    bank.confirm(t["transfer_id"])
+    assert nessie.posted == [(f"/accounts/{ACCOUNT}/withdrawals", {
+        "medium": "balance", "amount": 40, "transaction_date": "2026-10-17", "description": "Withdrawal"})]
+
+
+def test_a_scam_story_holds_a_withdrawal():
+    nessie = FakeNessie()
+    bank = Bank(nessie, CONFIG)
+    bank.add_transcript_line("c1", "they said take out cash and move it to a safe account right now")
+    t = bank.withdraw(2000)
+    assert t["status"] == "held"
+    with pytest.raises(BankError):
+        bank.confirm(t["transfer_id"])
+    assert nessie.posted == []
+
+
+def test_deposit_waits_for_a_yes_then_posts():
+    nessie = FakeNessie()
+    bank = Bank(nessie, CONFIG)
+    t = bank.deposit(25, "Birthday check")
+    assert t["kind"] == "deposit"
+    assert t["spoken_message"].startswith("I'll put $25.00 into your checking account")
+    bank.confirm(t["transfer_id"])
+    assert nessie.posted == [(f"/accounts/{ACCOUNT}/deposits", {
+        "medium": "balance", "amount": 25, "transaction_date": "2026-10-17", "description": "Birthday check"})]
+
+
+def test_deposits_and_withdrawals_must_be_positive():
+    bank = make_bank()
+    with pytest.raises(BankError):
+        bank.withdraw(0)
+    with pytest.raises(BankError):
+        bank.deposit(-5)
+
+
+# ---- When Gemini can't check --------------------------------------------------------
+
+def gemini_down(said):
+    raise GeminiUnavailable("down")
+
+
+def test_gemini_down_makes_a_new_payee_a_careful_confirm(monkeypatch):
+    monkeypatch.setattr(fraud_check, "scam_signals", gemini_down)
+    nessie = FakeNessie()
+    bank = Bank(nessie, CONFIG)
+    bank.add_transcript_line("c1", "send Bob twenty dollars")
+    t = bank.request_transfer("Bob", 20)
+    assert t["status"] == "awaiting_yes"
+    assert t["decision"] == "confirm"
+    assert "I couldn't finish my full scam check just now" in t["reasons"]
+    assert t["spoken_message"].startswith("Before I do this, please double-check.")
+    assert t["spoken_message"].endswith("I'll pay Bob $20.00 from your checking account. Are you sure?")
+    bank.confirm(t["transfer_id"])
+    assert len(nessie.posted) == 1
+
+
+def test_gemini_down_leaves_a_known_payee_alone(monkeypatch):
+    monkeypatch.setattr(fraud_check, "scam_signals", gemini_down)
+    bank = make_bank()
+    t = bank.request_transfer("Maria", 50)
+    assert t["decision"] == "allow"
+    assert t["spoken_message"] == "I'll pay Maria $50.00 from your checking account. Are you sure?"
+
+
+def test_gemini_down_never_lowers_a_hold(monkeypatch):
+    monkeypatch.setattr(fraud_check, "scam_signals", gemini_down)
+    bank = make_bank()
+    bank.add_transcript_line("c1", "they said move it to a safe account right now")
+    assert bank.request_transfer("Bob", 2000)["status"] == "held"
+
+
+def test_each_transcript_line_starts_an_early_gemini_check(monkeypatch):
+    import gemini_signals
+    asked = []
+    monkeypatch.setattr(gemini_signals, "prefetch", asked.append)
+    bank = make_bank()
+    bank.add_transcript_line("c1", "hi")
+    bank.add_transcript_line("c1", "send Maria fifty")
+    assert asked == ["hi", "hi send Maria fifty"]

@@ -12,6 +12,7 @@ from datetime import datetime
 from typing import Any, Dict, List, Optional
 
 import fraud_check
+import gemini_signals
 from models import PastTransfer, TransferRequest, TrustedContact, UserHistory
 from nessie import NessieApiError
 
@@ -30,6 +31,23 @@ class DemoConfig:
     payees: Dict[str, str] = field(default_factory=dict)  # lowercase name -> Nessie account ID
     trusted_contact: Optional[TrustedContact] = None
     today: Optional[str] = None           # Pin the date in tests: "2026-10-17"
+
+
+_TAG = re.compile(r"\s*\[[a-z]+:[^\]]*\]", re.IGNORECASE)
+_PAYEE_TAG = re.compile(r"\[payee:([^\]]+)\]", re.IGNORECASE)
+
+
+def _clean(description) -> str:
+    """The seed adds tags like [merchant:...][cat:...]; the agent shouldn't read them aloud."""
+    return _TAG.sub("", str(description or "")).strip()
+
+
+def _payee_of(transfer: Dict[str, Any]) -> str:
+    """Nessie's payee_id, or the [payee:...] tag the team's seed puts in the description."""
+    if transfer.get("payee_id"):
+        return transfer["payee_id"]
+    match = _PAYEE_TAG.search(str(transfer.get("description", "")))
+    return match.group(1) if match else ""
 
 
 def _as_datetime(date: str) -> str:
@@ -72,6 +90,9 @@ class Bank:
                 self._conversation_id = conversation_id
                 self._lines = []
             self._lines.append(text)
+            said = " ".join(self._lines)
+        # Check what they've said so far while they keep talking; request_transfer reuses it.
+        gemini_signals.prefetch(said)
 
     # ---- Requests (from the agent) ----------------------------------------------
 
@@ -88,6 +109,13 @@ class Bank:
         pay = amount if amount is not None else float(bill.get("payment_amount", 0))
         payee = bill.get("payee", biller_name)
         return self._start("bill", payee, f"biller:{payee.lower()}", pay, "", bill_id=bill.get("_id"))
+
+    def withdraw(self, amount: float, memo: str = "") -> Dict[str, Any]:
+        # Cash out is a common end to a scam, so it gets the same fraud check as a transfer.
+        return self._start("withdrawal", "cash", "cash:withdrawal", amount, memo or "Withdrawal", bill_id=None)
+
+    def deposit(self, amount: float, memo: str = "") -> Dict[str, Any]:
+        return self._start("deposit", "deposit", "cash:deposit", amount, memo or "Deposit", bill_id=None)
 
     def _start(self, kind: str, payee_name: str, payee_id: str, amount: float, memo: str,
                bill_id: Optional[str]) -> Dict[str, Any]:
@@ -125,7 +153,7 @@ class Bank:
                 "decision": "hold" if held else decision.decision,
                 "risk_score": decision.risk_score,
                 "reasons": reasons,
-                "spoken_message": self._spoken(held, reasons, payee_name, amount),
+                "spoken_message": self._spoken(held, decision.decision == "confirm", reasons, kind, payee_name, amount),
                 "payee_name": payee_name,
                 "amount": amount,
                 "from_account_name": self._config.account_name,
@@ -135,7 +163,8 @@ class Bank:
             self._current_id = transfer["transfer_id"]
             return dict(transfer)
 
-    def _spoken(self, held: bool, reasons: List[str], payee_name: str, amount: float) -> str:
+    def _spoken(self, held: bool, careful: bool, reasons: List[str], kind: str, payee_name: str,
+                amount: float) -> str:
         if held:
             # Our own wording: the fraud check's message offers a PIN release, which this app doesn't have.
             why = "".join(f" {r}." for r in reasons)
@@ -144,7 +173,18 @@ class Bank:
                 "Capital One will never ask you to move money to keep it safe. "
                 "If you think this is a mistake, please call Capital One."
             )
-        return f"I'll pay {payee_name} ${amount:,.2f} from your {self._config.account_name.lower()} account. Are you sure?"
+        account = self._config.account_name.lower()
+        if kind == "withdrawal":
+            ask = f"I'll take ${amount:,.2f} out of your {account} account. Are you sure?"
+        elif kind == "deposit":
+            ask = f"I'll put ${amount:,.2f} into your {account} account. Are you sure?"
+        else:
+            ask = f"I'll pay {payee_name} ${amount:,.2f} from your {account} account. Are you sure?"
+        if careful:
+            # A "confirm" decision: say why before asking, so the yes is an informed one.
+            why = "".join(f" {r}." for r in reasons)
+            return f"Before I do this, please double-check.{why} {ask}"
+        return ask
 
     # ---- Yes / No (from the agent or the app) ------------------------------------
 
@@ -161,17 +201,26 @@ class Bank:
             try:
                 if t["kind"] == "bill":
                     self._nessie.put(f"/bills/{private['bill_id']}", {"status": "completed"})
-                else:
-                    note = private["memo"] or f"To {t['payee_name']}"
-                    body = {
-                        "status": "completed",
+                elif t["kind"] in ("withdrawal", "deposit"):
+                    self._nessie.post(f"/accounts/{self._config.account_id}/{t['kind']}s", {
+                        "medium": "balance",
                         "amount": t["amount"],
                         "transaction_date": self._today(),
-                        "description": f"{note} [payee:{private['payee_id']}]",
+                        "description": private["memo"],
+                    })
+                else:
+                    # Nessie's TransferCreate has no payee field; like the team's seed, the
+                    # payee rides in the description as a [payee:...] tag that _payee_of reads.
+                    memo = private["memo"] or f"Transfer to {t['payee_name']}"
+                    body = {
+                        "transaction_date": self._today(),
+                        "status": "completed",
+                        "amount": t["amount"],
+                        "description": f"{memo} [payee:{private['payee_id']}]",
                     }
                     self._nessie.post(f"/accounts/{self._config.account_id}/transfers", body)
             except NessieApiError as err:
-                log.warning("Nessie payment for %s failed with status %s", transfer_id, err.status)
+                log.warning("Nessie payment for %s failed with status %s: %s", transfer_id, err.status, err.detail)
                 raise BankError("I couldn't complete that payment.")
             t["status"] = "executed"
             return dict(t)
@@ -205,11 +254,21 @@ class Bank:
             ],
         }
 
+    def list_accounts(self) -> List[Dict[str, Any]]:
+        """Every account the customer has, by name. Nessie IDs stay on the server."""
+        account = self._get(f"/accounts/{self._config.account_id}") or {}
+        customer_id = account.get("customer_id")
+        accounts = self._get(f"/customers/{customer_id}/accounts") if customer_id else [account]
+        return [
+            {"name": a.get("nickname") or a.get("type"), "type": a.get("type"), "balance": a.get("balance")}
+            for a in accounts or []
+        ]
+
     def recent_purchases(self, limit: int = 10) -> List[Dict[str, Any]]:
         purchases = self._get(f"/accounts/{self._config.account_id}/purchases") or []
         purchases = sorted(purchases, key=lambda p: p.get("purchase_date", ""), reverse=True)
         return [
-            {"description": p.get("description"), "amount": p.get("amount"), "date": p.get("purchase_date")}
+            {"description": _clean(p.get("description")), "amount": p.get("amount"), "date": p.get("purchase_date")}
             for p in purchases[:limit]
         ]
 
@@ -220,7 +279,7 @@ class Bank:
             return self._nessie.get(path)
         except NessieApiError as err:
             # Path and status only; the API key never reaches the logs.
-            log.warning("Nessie GET %s failed with status %s", path, err.status)
+            log.warning("Nessie GET %s failed with status %s: %s", path, err.status, err.detail)
             raise BankError("I couldn't reach the bank right now.")
 
     def _find_bill(self, biller_name: str) -> Optional[Dict[str, Any]]:

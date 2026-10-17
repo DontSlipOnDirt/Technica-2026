@@ -30,7 +30,7 @@ We are pitching a **feature that plugs into the existing Capital One app**, not 
 
 - Any path — voice, tap, retry, or agent reasoning — that lets a `hold` transfer go through.
 - The screen saying money was sent before the backend confirms it actually was.
-- The agent's own wording of the request being what the fraud check scans, instead of what the customer actually said.
+- The agent's own wording of the request being what the fraud check scans, instead of what the customer actually said (hence transcript forwarding).
 - The Capital One / ElevenLabs / Gemini / Nessie secret keys reaching the browser.
 - Looking like a generic chatbot rather than a Capital One feature.
 
@@ -81,15 +81,16 @@ Common to all looks, top to bottom:
 ## How it works (the parts decided)
 
 - **Voice:** ElevenLabs Agents, run in the browser with `@elevenlabs/react` (`useConversation`). The voice teammate configures the agent in the ElevenLabs dashboard and chooses a Gemini model as its LLM there. The agent is public so the app needs only the agent ID, never an ElevenLabs key.
-- **Money tools are client tools.** `request_transfer` and `pay_bill` run in the app, not on a server. When the agent calls one, the app sends the backend the agent's fields **plus the customer's own words from the transcript as `user_said`**. In the ElevenLabs dashboard these tools must be set to block the conversation (wait for the result).
-- **Tools take names, not IDs.** `request_transfer(payee_name, amount, memo)` and `pay_bill(biller_name, amount?)`. The backend looks up the Nessie account ID.
-- **Pending action by ID.** The backend's request endpoint returns the fraud decision with a `transfer_id`. Yes (voice or tap) confirms by that ID only; the backend sends exactly what it stored. A new money request cancels any older pending one. Confirming the same ID twice must not pay twice.
-- **Voice yes:** the agent calls a `confirm_payment(transfer_id)` / `cancel_payment(transfer_id)` client tool; the Yes/No buttons call the same app functions. Prompt rule for the agent: only a clear yes counts; if unsure, ask again.
+- **Tools live on an MCP server (required).** The backend exposes an MCP server (Python, FastMCP, stateless streamable HTTP, on Vercel at a public URL). It is added in the ElevenLabs dashboard as a custom MCP server and attached to the agent. MCP must be enabled for the ElevenLabs workspace first. Tools are set to **auto-approved** so the voice flow never stops for approval prompts; safety comes from the fraud check and confirm-by-ID, not approval.
+- **MCP tools:** `get_summary()`, `get_recent_purchases(days)`, `request_transfer(payee_name, amount, memo)`, `pay_bill(biller_name, amount?)`, `confirm_payment(transfer_id)`, `cancel_payment(transfer_id)`. Each calls the same backend functions as the HTTP endpoints — one door for money. Tools take names, not IDs; the backend looks up the Nessie account ID.
+- **Transcript forwarding gives the fraud check her real words.** The MCP server never sees the conversation, so the app sends every finished user line to `POST /api/transcript` (with the ElevenLabs `conversation_id` from `startSession`). When `request_transfer` / `pay_bill` run, the backend uses **every user line stored for the most recent conversation**, joined with spaces, as `user_said`. The agent never supplies `user_said`.
+- **The app checks for the pending transfer.** While a session is active, the app calls `GET /api/transfer/current` once a second and shows the panel for whatever it returns: `awaiting_yes` → Are-you-sure, `held` → scam caught, `executed` → sent, `cancelled` or nothing → no panel.
+- **Pending action by ID.** Yes confirms by `transfer_id` only; the backend sends exactly what it stored. A new money request cancels any older pending one. Confirming the same ID twice must not pay twice. A held ID can never be confirmed.
+- **Voice yes and tap yes:** the agent calls the `confirm_payment` / `cancel_payment` MCP tools; the Yes/No buttons call `POST /api/transfer/confirm` / `cancel` directly. Both land on the same backend function. After a tap, the app tells the agent the outcome with `sendContextualUpdate` so it can say "Done" and ask if there's anything else. Prompt rule for the agent: only a clear yes counts; if unsure, ask again.
 - **Read vs write is structural:** read tools return data; write tools can only create a pending action. There is no tool that moves money directly.
 - **Turn-taking:** deferred to ElevenLabs (e.g. its "patient" setting). Tap-the-circle-to-finish is the explicit override.
-- **After a tap or voice yes,** the app tells the agent the outcome (`sendContextualUpdate`) so it can say "Done" and ask if there's anything else.
-- **Stack:** React + Vite in `frontend/`, deployed to Vercel in the same project as the Python `api/` functions. Brand navy `#013d5b`, red `#d03027`.
-- **Stand-in API:** until the backend exists, a fake API in the app returns made-up data in the agreed shapes (e.g. `hold` when the request mentions "safe account" or is over $1,000; `confirm` between $300 and $1,000; `allow` otherwise), so the app is never blocked on teammates.
+- **Stack:** React + Vite in `frontend/`, deployed to Vercel in the same project as the Python backend and MCP server. Brand navy `#013d5b`, red `#d03027`.
+- **Stand-in API:** until the backend exists, a fake API in the app stores transcript lines, runs made-up fraud rules (`hold` when her words mention "safe account", the amount is over $1,000, or the payee was already held; `confirm` between $300 and $1,000; `allow` otherwise), and exposes a `simulateRequest` helper that plays the MCP server's part so the app can be tested without ElevenLabs or a backend.
 
 ## Backend contract the screen depends on
 
@@ -97,30 +98,30 @@ Owned by teammates; listed so the app and backend agree. All JSON is snake_case,
 
 | Endpoint | Body | Returns |
 |---|---|---|
-| `POST /api/transfer/request` | `kind` (`"transfer"`/`"bill"`), `payee_name`, `amount`, `description`, `user_said` | `decision`, `risk_score`, `reasons`, `spoken_message`, `transfer_id`, plus `payee_name`, `amount`, `from_account_name` for display |
-| `POST /api/transfer/confirm` | `transfer_id` | `status: "executed"` or `{"error": ...}` |
-| `POST /api/transfer/cancel` | `transfer_id` | `status: "cancelled"` |
-| `GET /api/summary` | — | summary numbers for read-only answers |
+| `POST /api/transcript` | `conversation_id`, `text` | `{"ok": true}` |
+| `GET /api/transfer/current` | — | `{"transfer": null}` or `{"transfer": {transfer_id, kind, status, decision, risk_score, reasons, spoken_message, payee_name, amount, from_account_name}}`; `status` is `"awaiting_yes"`, `"held"`, `"executed"`, or `"cancelled"` |
+| `POST /api/transfer/confirm` | `transfer_id` | `{"status": "executed"}` or `{"error": ...}` |
+| `POST /api/transfer/cancel` | `transfer_id` | `{"status": "cancelled"}` |
 
-`POST /transfer/release` and `GET /alerts` from the original contract are not used by this build.
+The MCP tools above are the agent's side of the same backend. `POST /transfer/release` and `GET /alerts` from the original contract are not used.
 
 ## Calls made by Claude (check these)
 
-- **`user_said` = every final user line in the session so far**, joined with spaces, not just the last turn. Scam coaching often comes several turns before the amount ("the bank said move it to a safe account" … "nine hundred dollars").
+- **`user_said` = every user line stored for the most recent conversation**, not just the last turn. Scam coaching often comes several turns before the amount. The demo has one active conversation at a time; supporting several at once would need the MCP tools to know which conversation called them, which ElevenLabs' docs don't promise.
 - **No app-side "did she really say yes" classifier.** Voice yes relies on the agent's prompt rule; the real protection is that only fraud-approved pending actions can be confirmed and holds can never be. The Yes/No buttons are the deterministic path.
-- **Read-only stand-in shapes** (to align with the data teammate): `GET /api/summary` → `{ "balance": 3400.00, "account_name": "Checking", "spent_this_week": 109.55, "bills_due": [{ "biller_name": "Pepco", "amount": 600.00, "due_date": "2026-10-24" }] }`; `GET /api/purchases?days=7` → `[{ "merchant": "Giant", "amount": 86.40, "date": "2026-10-15" }]`. For `pay_bill`, if `amount` is omitted the backend fills it from the Nessie bill for that biller.
-- **Failure wording comes from the app's tool result.** When an endpoint returns `{"error": ...}`, the client tool returns a sentence ending "No money was moved." and the agent reads it; the transcript stays a view of ElevenLabs' messages only.
+- **Checking once a second** is simple and fast enough for a demo; no websockets.
+- **Read-only shapes** (for the MCP tools; align with the data teammate): `get_summary` → `{ "balance": 3400.00, "account_name": "Checking", "spent_this_week": 109.55, "bills_due": [{ "biller_name": "Pepco", "amount": 600.00, "due_date": "2026-10-24" }] }`; `get_recent_purchases` → `[{ "merchant": "Giant", "amount": 86.40, "date": "2026-10-15" }]`. For `pay_bill`, if `amount` is omitted the backend fills it from the Nessie bill for that biller.
+- **Failure wording:** MCP tools return a sentence ending "No money was moved." on any error, and the agent reads it. When a Yes/No tap fails, the app sends the agent the same kind of sentence with `sendContextualUpdate`.
 
 ## Left to the builder
 
 - Exact animation of the pulsing rings and the idle/active transitions.
 - Exact copy of status lines and agent prompts beyond what's quoted above.
-- How read-only tools (`get_summary`, `get_recent_purchases`) are wired (client or server tool) — whichever is simpler with the stand-in API.
 - Component structure, state management, and styling approach inside the React app.
 - Whether to show the transcript's in-progress (tentative) user text.
 
 ## Open items to confirm with teammates
 
-- Voice teammate: tool names/params above, blocking client tools, Gemini as the LLM, public agent, "patient" turn setting, system prompt lines (read `spoken_message` verbatim; never say "sent" until told it executed; ask "anything else?" and end the call on no).
+- Voice teammate: enable MCP in the workspace, add the MCP server with tools auto-approved, Gemini as the LLM, public agent, "patient" turn setting, system prompt lines (read `spoken_message` verbatim; never say "sent" until told it executed; ask "anything else?" and end the call on no).
 - Fraud teammate: hold every later request to a payee that was already held in the session; drop PIN release; add `confirmed`/`executed`/`cancelled` statuses and store the full request with the `transfer_id`; note that a $600 Pepco bill currently scores 25 → `allow` (no warning) because rules use overall average, not per-payee.
-- Backend owner (unassigned): the endpoints above, CORS for the app, payee-name lookup.
+- Backend owner (unassigned): the MCP server and the endpoints above, transcript storage, CORS for the app, payee-name lookup.

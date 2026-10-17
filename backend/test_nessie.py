@@ -30,6 +30,26 @@ def test_http_failures_raise_without_leaking_the_body():
     assert "upstream failure" not in str(err.value)
 
 
+def test_nessie_error_message_is_kept_as_detail():
+    def handler(request):
+        return httpx.Response(400, json={"code": 400, "message": "Transfer validation failed",
+                                         "culprit": ["payee_id: invalid"]})
+
+    with pytest.raises(NessieApiError) as err:
+        client_with(handler).post("/accounts/a1/transfers", {"amount": 5})
+    assert err.value.detail == "Transfer validation failed (payee_id: invalid)"
+    assert "validation" not in str(err.value)
+
+
+def test_other_error_bodies_become_detail_without_the_key():
+    def handler(request):
+        return httpx.Response(400, text="bad transaction_date for key=test-key")
+
+    with pytest.raises(NessieApiError) as err:
+        client_with(handler).get("/accounts/a1")
+    assert err.value.detail == "bad transaction_date for key=***"
+
+
 def test_post_sends_json():
     seen = {}
 

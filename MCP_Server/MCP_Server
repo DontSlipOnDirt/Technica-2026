@@ -1,0 +1,54 @@
+"""
+MCP server exposing the Nessie banking functions as tools.
+
+An ElevenLabs agent connects to this server's URL, lists the tools below,
+and calls them. MCP handles the request format and argument schemas, so
+handler.py's validation and transactions.py stay exactly as they are.
+
+Run:
+    python -m pip install "mcp[cli]"
+    python mcp_server.py          # serves http://0.0.0.0:8000/mcp
+"""
+from mcp.server.mcpserver import MCPServer
+
+import Transaction_Handler as Handler
+
+mcp = MCPServer("nessie-banking")
+
+
+# The docstrings matter: the agent's LLM reads them to decide when and how
+# to call each tool, so say plainly what each one does.
+
+@mcp.tool()
+def list_accounts(customer_id: str) -> dict:
+    """List all bank accounts belonging to a customer."""
+    return Handler.list_accounts(customer_id)
+
+
+@mcp.tool()
+def get_balance(account_id: str) -> dict:
+    """Get the current balance of one account."""
+    return Handler.get_balance(account_id)
+
+
+@mcp.tool()
+def deposit(account_id: str, amount: float, description: str = "Deposit") -> dict:
+    """Deposit money into an account. Amount is in dollars, max 2 decimal places."""
+    return Handler.deposit(account_id, amount, description)
+
+
+@mcp.tool()
+def withdraw(account_id: str, amount: float, description: str = "Withdrawal") -> dict:
+    """Withdraw money from an account. Amount is in dollars, max 2 decimal places."""
+    return Handler.withdraw(account_id, amount, description)
+
+
+@mcp.tool()
+def transfer(from_account_id: str, to_account_id: str, amount: float,
+             description: str = "Transfer") -> dict:
+    """Transfer money between two different accounts. Amount is in dollars."""
+    return Handler.transfer(from_account_id, to_account_id, amount, description)
+
+
+if __name__ == "__main__":
+    mcp.run(transport="streamable-http", host="0.0.0.0", port=8000)
