@@ -175,8 +175,8 @@ class Bank:
     # ---- Read-only answers -------------------------------------------------------
 
     def summary(self) -> Dict[str, Any]:
-        account = self._nessie.get(f"/accounts/{self._config.account_id}") or {}
-        bills = self._nessie.get(f"/accounts/{self._config.account_id}/bills") or []
+        account = self._get(f"/accounts/{self._config.account_id}") or {}
+        bills = self._get(f"/accounts/{self._config.account_id}/bills") or []
         return {
             "balance": account.get("balance"),
             "account_name": self._config.account_name,
@@ -187,7 +187,7 @@ class Bank:
         }
 
     def recent_purchases(self, limit: int = 10) -> List[Dict[str, Any]]:
-        purchases = self._nessie.get(f"/accounts/{self._config.account_id}/purchases") or []
+        purchases = self._get(f"/accounts/{self._config.account_id}/purchases") or []
         purchases = sorted(purchases, key=lambda p: p.get("purchase_date", ""), reverse=True)
         return [
             {"description": p.get("description"), "amount": p.get("amount"), "date": p.get("purchase_date")}
@@ -196,9 +196,15 @@ class Bank:
 
     # ---- Helpers -----------------------------------------------------------------
 
+    def _get(self, path: str) -> Any:
+        try:
+            return self._nessie.get(path)
+        except NessieApiError:
+            raise BankError("I couldn't reach the bank right now.")
+
     def _find_bill(self, biller_name: str) -> Optional[Dict[str, Any]]:
         wanted = biller_name.strip().lower()
-        bills = self._nessie.get(f"/accounts/{self._config.account_id}/bills") or []
+        bills = self._get(f"/accounts/{self._config.account_id}/bills") or []
         for bill in bills:
             if bill.get("status") != "completed" and wanted in str(bill.get("payee", "")).lower():
                 return bill
@@ -206,10 +212,10 @@ class Bank:
 
     def _history(self) -> UserHistory:
         account_id = self._config.account_id
-        account = self._nessie.get(f"/accounts/{account_id}") or {}
-        transfers = [t for t in (self._nessie.get(f"/accounts/{account_id}/transfers") or [])
+        account = self._get(f"/accounts/{account_id}") or {}
+        transfers = [t for t in (self._get(f"/accounts/{account_id}/transfers") or [])
                      if t.get("payer_id", account_id) == account_id]
-        bills = self._nessie.get(f"/accounts/{account_id}/bills") or []
+        bills = self._get(f"/accounts/{account_id}/bills") or []
         amounts = [float(t.get("amount", 0)) for t in transfers]
         return UserHistory(
             known_payees=[t.get("payee_id") for t in transfers] +
