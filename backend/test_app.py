@@ -307,7 +307,7 @@ async def test_move_between_accounts_then_confirm_says_moved(setup):
     assert reply["say"] == "I'll move $100.00 from your checking account to your Rainy day account. Are you sure?"
     done = tool_json(await mcp.call_tool("confirm_payment", {"transfer_id": reply["transfer"]["transfer_id"]}))
     assert done["say"].startswith("Done. $100.00 has been moved from your checking account to your Rainy day account.")
-    assert [path for path, _ in nessie.posted] == [f"/accounts/{ACCOUNT}/transfers", f"/accounts/{SAVINGS}/deposits"]
+    assert [path for path, _ in nessie.posted] == [f"/accounts/{ACCOUNT}/withdrawals", f"/accounts/{SAVINGS}/deposits"]
 
 
 async def test_pay_loan_then_confirm_says_paid(setup):
@@ -349,7 +349,7 @@ async def test_part_of_a_bill_says_what_is_still_due(setup):
 
 async def test_an_unknown_outcome_never_says_no_money_moved(setup):
     nessie, _, mcp, _ = setup
-    nessie.fail_paths["/transfers"] = NessieApiError("Nessie request timed out", 408, outcome_unknown=True)
+    nessie.fail_paths["/withdrawals"] = NessieApiError("Nessie request timed out", 408, outcome_unknown=True)
     reply = tool_json(await mcp.call_tool("request_transfer", {"payee_name": "Maria", "amount": 50}))
     done = tool_json(await mcp.call_tool("confirm_payment", {"transfer_id": reply["transfer"]["transfer_id"]}))
     assert done["ok"] is False

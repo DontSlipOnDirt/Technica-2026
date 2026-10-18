@@ -425,18 +425,14 @@ class Bank:
             self._nessie.post(f"/accounts/{source}/{kind}s", cash(p["memo"]))
             self._move(source, amount if kind == "deposit" else -amount)
         elif kind in ("transfer", "own_transfer"):
-            # Nessie's TransferCreate has no payee field; like the team's seed, the
-            # payee rides in the description as a [payee:...] tag that _payee_of reads.
+            # This Nessie has no working way to send money to another account, so money goes out
+            # as a withdrawal. Like the team's seed, the payee rides in the description as a
+            # [payee:...] tag that _payee_of reads, so the scam check knows who was paid.
             memo = p["memo"] or f"Transfer to {t['payee_name']}"
-            self._nessie.post(f"/accounts/{source}/transfers", {
-                "transaction_date": self._today(),
-                "status": "completed",
-                "amount": amount,
-                "description": f"{memo} [payee:{p['payee_id']}]",
-            })
+            self._nessie.post(f"/accounts/{source}/withdrawals", cash(f"{memo} [payee:{p['payee_id']}]"))
             self._move(source, -amount)
             if kind == "own_transfer":
-                # With no payee field the transfer can't credit her other account, so a deposit does.
+                # ...and comes into her other account as a deposit.
                 try:
                     self._nessie.post(f"/accounts/{p['payee_id']}/deposits", cash(f"Transfer from {t['from_account_name']}"))
                     self._move(p["payee_id"], amount)
@@ -616,6 +612,8 @@ class Bank:
         try:
             return self._nessie.get(path)
         except NessieApiError as err:
+            if err.status == 404 and path.endswith("/transfers"):
+                return []   # Nessie answers 404 "No transfers found for this account" for an empty list.
             # Path and status only; the API key never reaches the logs.
             log.warning("Nessie GET %s failed with status %s: %s", path, err.status, err.detail)
             raise BankError("I couldn't reach the bank right now.")
@@ -716,9 +714,12 @@ class Bank:
         source_id = source.get("_id")
         # Only transfers she sent where we can tell who got the money. That also skips
         # test transfers someone left in Nessie, which would drag her "usual amount" down.
-        transfers = [t for t in (self._get(f"/accounts/{source_id}/transfers") or [])
+        # Payments are the seed's transfers plus the withdrawals this server tags with a payee.
+        sent = (self._get(f"/accounts/{source_id}/transfers") or []) + (self._get(f"/accounts/{source_id}/withdrawals") or [])
+        transfers = [t for t in sent
                      if t.get("payer_id", source_id) == source_id
                      and t.get("status") != "cancelled" and _payee_of(t)]
+        transfers.sort(key=lambda t: t.get("transaction_date") or "")
         own = {a.get("_id") for a in accounts}
         known = [_payee_of(t) for t in transfers]
         # Her own accounts aren't new payees, except ones opened through this server:

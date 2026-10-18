@@ -132,8 +132,8 @@ def test_yes_sends_exactly_what_was_checked_once():
     assert bank.confirm(t["transfer_id"])["status"] == "executed"
     assert bank.confirm(t["transfer_id"])["status"] == "executed"
     assert nessie.posted == [(
-        f"/accounts/{ACCOUNT}/transfers",
-        {"transaction_date": "2026-10-17", "status": "completed", "amount": 50,
+        f"/accounts/{ACCOUNT}/withdrawals",
+        {"medium": "balance", "status": "completed", "amount": 50, "transaction_date": "2026-10-17",
          "description": "Lunch [payee:acct-maria]"},
     )]
 
@@ -507,7 +507,7 @@ def test_moving_money_between_her_accounts_waits_for_a_yes_then_moves_it_once():
     bank.confirm(t["transfer_id"])
     # This Nessie's transfers carry no payee, so the money lands in checking as a deposit.
     assert nessie.posted == [
-        (f"/accounts/{SAVINGS}/transfers", {"transaction_date": "2026-10-17", "status": "completed", "amount": 500,
+        (f"/accounts/{SAVINGS}/withdrawals", {"medium": "balance", "status": "completed", "amount": 500, "transaction_date": "2026-10-17",
                                             "description": "Transfer to Checking [payee:acct-rose]"}),
         (f"/accounts/{ACCOUNT}/deposits", {"medium": "balance", "status": "completed", "amount": 500, "transaction_date": "2026-10-17",
                                            "description": "Transfer from Rainy day"}),
@@ -555,6 +555,34 @@ def test_the_fraud_check_sees_the_balance_after_earlier_moves():
     bank.confirm(bank.transfer_between_accounts("checking", "savings", 2500)["transfer_id"])
     t = bank.request_transfer("Maria", 300)
     assert "This is more than half of your balance" in t["reasons"]
+
+
+def test_someone_she_paid_through_a_tagged_withdrawal_is_a_known_payee():
+    nessie = FakeNessie()
+    nessie.transfers = []
+    nessie.withdrawals = [{"amount": 100, "transaction_date": "2026-10-01", "status": "completed",
+                           "description": "Lunch [payee:acct-maria]"}]
+    t = Bank(nessie, CONFIG).request_transfer("Maria", 50)
+    assert t["risk_score"] == 0, t["reasons"]
+
+
+class NoTransfersNessie(FakeNessie):
+    """The real Nessie answers 404 "No transfers found for this account" instead of []."""
+
+    def get(self, path, params=None):
+        if path.endswith("/transfers") and not super().get(path, params):
+            raise NessieApiError("Nessie request failed with status 404", 404)
+        return super().get(path, params)
+
+
+def test_an_account_with_no_transfers_yet_still_works():
+    nessie = NoTransfersNessie()
+    bank = Bank(nessie, CONFIG)
+    assert bank.transfers("savings") == []
+    t = bank.transfer_between_accounts("savings", "checking", 50)
+    assert t["status"] == "awaiting_yes"
+    bank.confirm(t["transfer_id"])
+    assert [path for path, _ in nessie.posted] == [f"/accounts/{SAVINGS}/withdrawals", f"/accounts/{ACCOUNT}/deposits"]
 
 
 def test_her_own_accounts_are_not_new_payees():
@@ -782,7 +810,7 @@ def test_a_plain_yes_still_sends():
 
 def test_a_timeout_on_the_yes_is_unknown_and_never_retried():
     nessie = FakeNessie()
-    nessie.fail_paths["/transfers"] = NessieApiError("Nessie request timed out", 408, outcome_unknown=True)
+    nessie.fail_paths["/withdrawals"] = NessieApiError("Nessie request timed out", 408, outcome_unknown=True)
     bank = Bank(nessie, CONFIG)
     t = bank.request_transfer("Maria", 50)
     with pytest.raises(PaymentUnknown, match="not sure that payment went through"):
@@ -815,4 +843,4 @@ def test_money_that_left_but_did_not_arrive_is_reported_honestly():
     with pytest.raises(PaymentUnknown, match="left your checking account, but I couldn't confirm it reached"):
         bank.confirm(t["transfer_id"])
     assert bank.current()["status"] == "unknown"
-    assert [path for path, _ in nessie.posted] == [f"/accounts/{ACCOUNT}/transfers"]
+    assert [path for path, _ in nessie.posted] == [f"/accounts/{ACCOUNT}/withdrawals"]

@@ -40,8 +40,8 @@ Accounts, bills, loans, and stores are named the way the customer says them ("sa
 
 | Tool | On yes, in Nessie |
 |---|---|
-| `request_transfer(payee_name, amount, memo?)` | Transfer from checking to a known payee |
-| `transfer_between_accounts(from_account, to_account, amount, memo?)` | Transfer from one of her accounts plus a deposit into the other (this Nessie's transfers have no payee field) |
+| `request_transfer(payee_name, amount, memo?)` | Withdrawal from checking tagged `[payee:...]` (this Nessie has no working transfer between accounts) |
+| `transfer_between_accounts(from_account, to_account, amount, memo?)` | Withdrawal from one of her accounts plus a deposit into the other |
 | `pay_bill(biller_name, amount?, from_account?)` | Withdrawal, then the bill is marked paid, or its amount lowered after a partial payment. Never more than is owed |
 | `pay_loan(loan_name?, amount?, from_account?)` | Withdrawal, then the loan's amount owed is lowered. Defaults to the monthly payment; never more than is owed |
 | `withdraw(amount, memo?)`, `deposit(amount, memo?)` | Withdrawal or deposit on checking |
