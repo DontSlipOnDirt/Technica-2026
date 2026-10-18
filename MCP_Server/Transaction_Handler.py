@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import functools
 import math
+import os
 from datetime import date
 from decimal import Decimal, InvalidOperation
 from typing import Any, Callable, Literal, ParamSpec, get_args
@@ -44,7 +45,8 @@ def _respond(fn: Callable[P, Any]) -> Callable[P, dict[str, Any]]:
 def _get_client() -> NessieClient:
     global _client
     if _client is None:
-        _client = NessieClient()
+        # NessieClient has no default key; Nessie_Client already loaded .env into the environment.
+        _client = NessieClient(api_key=os.environ.get("NESSIE_API_KEY"))
     return _client
 
 

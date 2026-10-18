@@ -2,8 +2,11 @@ services:
   - type: web
     name: nessie-mcp-server
     runtime: python
+    rootDir: MCP_Server   # Build and start commands run from here.
     buildCommand: pip install -r requirements.txt
     startCommand: python MCP_Server
     envVars:
       - key: NESSIE_API_KEY
+        sync: false
+      - key: BASE_CUSTOMER_ID
         sync: false

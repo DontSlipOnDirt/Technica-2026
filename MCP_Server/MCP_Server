@@ -14,14 +14,15 @@ from mcp.server.mcpserver import MCPServer
 import os
 from typing import Literal
 
-import os
-
 import Transaction_Handler as Handler
 
 
 mcp = MCPServer("nessie-banking")
 
-CUSTOMER_ID = str(os.environ.get("BASE_CUSTOMER_ID"))
+# Without it every call would ask Nessie about customer "None"; fail at startup instead.
+CUSTOMER_ID = os.environ.get("BASE_CUSTOMER_ID", "").strip()
+if not CUSTOMER_ID:
+    raise RuntimeError("BASE_CUSTOMER_ID is required (the demo customer's Nessie ID)")
 
 AccountType = Literal["Checking", "Savings", "Credit Card"]
 
@@ -33,7 +34,7 @@ def get_accounts(account_id: str | None = None,
                  account_type: AccountType | None = None) -> dict:
     """Get the customer's bank accounts. With account_id, returns that one
     account including its balance. Without it, lists all accounts, optionally
-    only those of one account_typ   e (Checking, Savings or Credit Card)."""
+    only those of one account_type (Checking, Savings or Credit Card)."""
     return Handler.get_accounts(CUSTOMER_ID, account_id=account_id,
                                 account_type=account_type)
 
