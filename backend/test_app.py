@@ -6,7 +6,8 @@ from starlette.testclient import TestClient
 import fraud_check
 from app import create_app
 from bank import Bank
-from test_bank import CONFIG, FakeNessie
+from nessie import NessieApiError
+from test_bank import ACCOUNT, CONFIG, SAVINGS, FakeNessie, auto_loan
 
 
 @pytest.fixture(autouse=True)
@@ -109,9 +110,36 @@ async def test_get_recent_purchases_is_json(setup):
 async def test_there_is_no_tool_that_moves_money_directly(setup):
     _, _, mcp, _ = setup
     names = {t.name for t in await mcp.list_tools()}
-    # withdraw and deposit only prepare; confirm_payment is still the only tool that moves money.
-    assert names == {"get_summary", "list_accounts", "get_recent_purchases", "request_transfer", "pay_bill",
-                     "withdraw", "deposit", "confirm_payment", "cancel_payment"}
+    assert names == {
+        # Read only
+        "get_summary", "list_accounts", "get_recent_purchases", "get_deposits", "get_withdrawals", "get_transfers",
+        "get_bills", "get_loans", "find_merchant",
+        # Prepare only: each returns a transfer_id and waits for a yes
+        "request_transfer", "transfer_between_accounts", "pay_bill", "pay_loan", "withdraw", "deposit",
+        "create_account",
+        # The yes and the no: confirm_payment is still the only tool that moves money
+        "confirm_payment", "cancel_payment",
+    }
+
+
+async def test_every_money_tool_only_prepares(setup):
+    nessie, bank, mcp, _ = setup
+    nessie.loans = [auto_loan()]
+    calls = {
+        "request_transfer": {"payee_name": "Maria", "amount": 50},
+        "transfer_between_accounts": {"from_account": "savings", "to_account": "checking", "amount": 50},
+        "pay_bill": {"biller_name": "Pepco", "amount": 50},
+        "pay_loan": {"loan_name": "auto"},
+        "withdraw": {"amount": 40},
+        "deposit": {"amount": 25},
+        "create_account": {"account_type": "Savings"},
+    }
+    for name, args in calls.items():
+        reply = tool_json(await mcp.call_tool(name, args))
+        assert reply["ok"] is True, (name, reply)
+        assert reply["transfer"]["status"] == "awaiting_yes", name
+        assert reply["transfer"]["transfer_id"] == bank.current()["transfer_id"], name
+    assert nessie.posted == [] and nessie.puts == []
 
 
 # ---- App endpoints: what the screen calls -----------------------------------------
@@ -216,3 +244,141 @@ async def test_deposit_then_confirm_says_done(setup):
     done = tool_json(await mcp.call_tool("confirm_payment", {"transfer_id": reply["transfer"]["transfer_id"]}))
     assert done["say"].startswith("Done. $25.00 has been added to your checking account")
     assert nessie.posted[0][0].endswith("/deposits")
+
+
+# ---- Read tools added from the Nessie-framework server ------------------------------
+
+async def test_get_bills_says_what_is_due(setup):
+    _, _, mcp, _ = setup
+    reply = tool_json(await mcp.call_tool("get_bills", {}))
+    assert reply["say"] == "You have 1 bill due: Pepco for $600.00."
+    assert reply["bills"][0]["biller_name"] == "Pepco"
+    assert tool_json(await mcp.call_tool("get_bills", {"recurring": True}))["say"] == "You have no repeating bills due."
+    assert tool_json(await mcp.call_tool("get_bills", {"include_paid": True}))["say"] == "I found 1 bill."
+
+
+async def test_get_loans_says_what_is_owed(setup):
+    nessie, _, mcp, _ = setup
+    assert tool_json(await mcp.call_tool("get_loans", {}))["say"] == "You don't have any loans."
+    nessie.loans = [auto_loan()]
+    reply = tool_json(await mcp.call_tool("get_loans", {}))
+    assert reply["say"] == "You have 1 loan: your auto loan with $4,200.00 still owed."
+    assert reply["loans"][0]["monthly_payment"] == 350
+
+
+async def test_history_tools_reply_with_json(setup):
+    nessie, _, mcp, _ = setup
+    nessie.deposits = [{"amount": 1450, "transaction_date": "2026-10-03", "description": "Social Security"}]
+    deposits = tool_json(await mcp.call_tool("get_deposits", {}))
+    assert deposits["say"] == "Your last deposit: Social Security for $1,450.00 on October 3."
+    assert deposits["deposits"][0]["amount"] == 1450
+    withdrawals = tool_json(await mcp.call_tool("get_withdrawals", {"account_name": "savings"}))
+    assert withdrawals == {"ok": True, "say": "I don't see any withdrawals.", "withdrawals": []}
+    transfers = tool_json(await mcp.call_tool("get_transfers", {}))
+    assert transfers["transfers"][0]["to"] == "Maria"
+
+
+async def test_an_unknown_account_name_is_a_sentence(setup):
+    _, _, mcp, _ = setup
+    reply = tool_json(await mcp.call_tool("get_deposits", {"account_name": "brokerage"}))
+    assert reply == {"ok": False, "error": "I couldn't find an account called brokerage.",
+                     "say": "I couldn't find an account called brokerage."}
+
+
+async def test_purchases_by_merchant_and_merchant_lookup(setup):
+    _, _, mcp, _ = setup
+    reply = tool_json(await mcp.call_tool("get_recent_purchases", {"merchant_name": "Giant"}))
+    assert reply["say"] == "Your last purchase from Giant: Giant for $86.40 on October 15."
+    assert reply["purchases"][0]["amount"] == 86.40
+    found = tool_json(await mcp.call_tool("find_merchant", {"name": "giant"}))
+    assert found["say"] == "I found Giant Food, at 4500 Knox Rd, College Park, MD 20740."
+    assert found["merchants"] == [{"name": "Giant Food", "category": "Grocery",
+                                   "address": "4500 Knox Rd, College Park, MD 20740"}]
+    missing = tool_json(await mcp.call_tool("find_merchant", {"name": "Target"}))
+    assert missing["say"] == "I couldn't find a store called Target in your purchases."
+
+
+# ---- Money tools added from the Nessie-framework server ------------------------------
+
+async def test_move_between_accounts_then_confirm_says_moved(setup):
+    nessie, _, mcp, _ = setup
+    reply = tool_json(await mcp.call_tool("transfer_between_accounts",
+                                          {"from_account": "checking", "to_account": "savings", "amount": 100}))
+    assert reply["say"] == "I'll move $100.00 from your checking account to your Rainy day account. Are you sure?"
+    done = tool_json(await mcp.call_tool("confirm_payment", {"transfer_id": reply["transfer"]["transfer_id"]}))
+    assert done["say"].startswith("Done. $100.00 has been moved from your checking account to your Rainy day account.")
+    assert [path for path, _ in nessie.posted] == [f"/accounts/{ACCOUNT}/transfers", f"/accounts/{SAVINGS}/deposits"]
+
+
+async def test_pay_loan_then_confirm_says_paid(setup):
+    nessie, _, mcp, _ = setup
+    nessie.loans = [auto_loan()]
+    reply = tool_json(await mcp.call_tool("pay_loan", {}))
+    done = tool_json(await mcp.call_tool("confirm_payment", {"transfer_id": reply["transfer"]["transfer_id"]}))
+    assert done["say"].startswith("Done. $350.00 has been paid toward your auto loan.")
+    assert nessie.puts == [("/loans/loan-1", {"amount": 3850})]
+
+
+async def test_paying_more_than_a_bill_is_refused(setup):
+    nessie, _, mcp, _ = setup
+    reply = tool_json(await mcp.call_tool("pay_bill", {"biller_name": "Pepco", "amount": 700}))
+    assert reply == {"ok": False, "error": "That's more than the $600.00 you owe Pepco.",
+                     "say": "That's more than the $600.00 you owe Pepco. No money was moved."}
+
+
+async def test_create_account_needs_a_yes(setup):
+    nessie, _, mcp, _ = setup
+    reply = tool_json(await mcp.call_tool("create_account", {"account_type": "Savings", "nickname": "Travel"}))
+    assert reply["say"] == "I'll open a new savings account called Travel, with a $0.00 balance. Are you sure?"
+    cancelled = tool_json(await mcp.call_tool("cancel_payment", {"transfer_id": reply["transfer"]["transfer_id"]}))
+    assert cancelled["say"] == "Okay, I didn't open it. No money was moved."
+    again = tool_json(await mcp.call_tool("create_account", {"account_type": "Savings", "nickname": "Travel"}))
+    done = tool_json(await mcp.call_tool("confirm_payment", {"transfer_id": again["transfer"]["transfer_id"]}))
+    assert done["say"] == "Done. Your new savings account is open. Is there anything else I can help with?"
+    assert nessie.posted == [("/customers/cust-rose/accounts",
+                              {"type": "Savings", "nickname": "Travel", "rewards": 0, "balance": 0})]
+
+
+async def test_part_of_a_bill_says_what_is_still_due(setup):
+    _, _, mcp, _ = setup
+    reply = tool_json(await mcp.call_tool("pay_bill", {"biller_name": "Pepco", "amount": 200}))
+    done = tool_json(await mcp.call_tool("confirm_payment", {"transfer_id": reply["transfer"]["transfer_id"]}))
+    assert done["say"] == ("Done. $200.00 has been sent to Pepco. $400.00 is still due. "
+                           "Is there anything else I can help with?")
+
+
+async def test_an_unknown_outcome_never_says_no_money_moved(setup):
+    nessie, _, mcp, _ = setup
+    nessie.fail_paths["/transfers"] = NessieApiError("Nessie request timed out", 408, outcome_unknown=True)
+    reply = tool_json(await mcp.call_tool("request_transfer", {"payee_name": "Maria", "amount": 50}))
+    done = tool_json(await mcp.call_tool("confirm_payment", {"transfer_id": reply["transfer"]["transfer_id"]}))
+    assert done["ok"] is False
+    assert "not sure that payment went through" in done["say"]
+    assert "No money was moved" not in done["say"]
+
+
+async def test_read_replies_name_the_details_not_just_a_count(setup):
+    nessie, _, mcp, _ = setup
+    nessie.purchases = [
+        {"amount": 54.20, "purchase_date": "2026-10-17", "description": "Fresh Market"},
+        {"amount": 18.75, "purchase_date": "2026-10-16", "description": "CVS Pharmacy"},
+        {"amount": 9.50, "purchase_date": "2026-10-14", "description": "Corner Cafe [cat:Food]"},
+        {"amount": 71.10, "purchase_date": "2026-10-09", "description": "Fresh Market"},
+    ]
+    nessie.bills[0]["payment_date"] = "2026-10-24"
+    purchases = tool_json(await mcp.call_tool("get_recent_purchases", {"limit": 5}))
+    assert purchases["say"] == ("Your last 4 purchases: Fresh Market for $54.20 on October 17, CVS Pharmacy for "
+                                "$18.75 on October 16, and Corner Cafe for $9.50 on October 14. "
+                                "I can read the other 1.")
+    bills = tool_json(await mcp.call_tool("get_bills", {}))
+    assert bills["say"] == "You have 1 bill due: Pepco for $600.00, due October 24."
+    transfers = tool_json(await mcp.call_tool("get_transfers", {}))
+    assert transfers["say"] == "Your last transfer: $100.00 to Maria on October 1."
+
+
+def test_the_screen_sees_which_kind_of_request_is_waiting(setup):
+    _, bank, _, app = setup
+    bank.create_account("Savings", "Travel")
+    with TestClient(app) as client:
+        t = client.get("/api/transfer/current").json()["transfer"]
+    assert (t["kind"], t["account_type"], t["payee_name"], t["amount"]) == ("new_account", "Savings", "Travel", 0)

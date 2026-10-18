@@ -5,6 +5,7 @@ import { ApiError, type BankApi } from '../api/types'
 import { screenReducer, type ScreenAction, type ScreenState } from './screenState'
 
 const NO_MONEY_MOVED = 'No money was moved.'
+const UNSURE = "I'm not sure that payment went through. Please check your balance before trying again."
 
 function failure(err: unknown): string {
   const reason = err instanceof ApiError ? err.message : "I couldn't reach the bank."
@@ -30,14 +31,14 @@ export async function checkCurrentTransfer(api: BankApi, dispatch: (a: ScreenAct
   }
 }
 
-/** Refresh after a tap and return the new state, so the caller can describe it. */
-async function refresh(api: BankApi, state: ScreenState, dispatch: (a: ScreenAction) => void): Promise<ScreenState> {
+/** Refresh after a tap and return the new state, or null if the bank couldn't be asked. */
+async function refresh(api: BankApi, state: ScreenState, dispatch: (a: ScreenAction) => void): Promise<ScreenState | null> {
   try {
     const action: ScreenAction = { type: 'current', transfer: await api.getCurrentTransfer() }
     dispatch(action)
     return screenReducer(state, action)
   } catch {
-    return state
+    return null
   }
 }
 
@@ -48,33 +49,42 @@ function say(dispatch: (a: ScreenAction) => void, text: string): string {
 
 /**
  * After a failed tap, look again before claiming nothing moved: a lost response,
- * or the agent's voice yes, may already have sent it.
+ * or the agent's voice yes, may already have sent it. If nobody can tell, say so.
  */
 async function afterError(api: BankApi, state: ScreenState, dispatch: (a: ScreenAction) => void, err: unknown): Promise<string> {
   const after = await refresh(api, state, dispatch)
-  if (after.transfer?.transfer_id === state.transfer?.transfer_id && after.transfer?.status === 'executed') {
+  const same = after?.transfer?.transfer_id === state.transfer?.transfer_id
+  if (!after || (same && after.transfer?.status === 'unknown')) return say(dispatch, UNSURE)
+  if (same && after.transfer?.status === 'executed') {
     return say(dispatch, `That payment was already sent. ${after.sentText ?? ''}`.trim())
   }
   return say(dispatch, failure(err))
 }
 
+/** A tap on a transfer that isn't waiting for a yes: describe where it really stands. */
+function notWaiting(dispatch: (a: ScreenAction) => void, state: ScreenState): string {
+  if (state.transfer?.status === 'executed') return say(dispatch, 'That payment was already sent.')
+  if (state.transfer?.status === 'unknown') return say(dispatch, UNSURE)
+  return say(dispatch, `That payment isn't waiting for a yes. ${NO_MONEY_MOVED}`)
+}
+
 /** The Yes button. Returns the sentence to tell the agent. */
 export async function answerYes(api: BankApi, state: ScreenState, dispatch: (a: ScreenAction) => void): Promise<string> {
   const t = state.transfer
-  if (t?.status !== 'awaiting_yes') return say(dispatch, `That payment isn't waiting for a yes. ${NO_MONEY_MOVED}`)
+  if (t?.status !== 'awaiting_yes') return notWaiting(dispatch, state)
   try {
     await api.confirmTransfer(t.transfer_id)
   } catch (err) {
     return afterError(api, state, dispatch, err)
   }
   const after = await refresh(api, state, dispatch)
-  return `The customer tapped Yes. ${after.sentText ?? 'The payment was sent.'}`
+  return `The customer tapped Yes. ${after?.sentText ?? 'The payment was sent.'}`
 }
 
 /** The No button. Returns the sentence to tell the agent. */
 export async function answerNo(api: BankApi, state: ScreenState, dispatch: (a: ScreenAction) => void): Promise<string> {
   const t = state.transfer
-  if (t?.status !== 'awaiting_yes') return say(dispatch, `That payment isn't waiting for a yes. ${NO_MONEY_MOVED}`)
+  if (t?.status !== 'awaiting_yes') return notWaiting(dispatch, state)
   try {
     await api.cancelTransfer(t.transfer_id)
   } catch (err) {

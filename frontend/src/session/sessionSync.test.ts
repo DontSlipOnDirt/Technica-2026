@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import { createFakeApi } from '../api/fakeApi'
+import { ApiError } from '../api/types'
 import { initialScreenState, screenReducer, type ScreenAction, type ScreenState } from './screenState'
 import { answerNo, answerYes, checkCurrentTransfer, forwardUserLine } from './sessionSync'
 
@@ -140,6 +141,27 @@ describe('review fixes', () => {
     vi.spyOn(api, 'confirmTransfer').mockRejectedValue(new TypeError('fetch failed'))
     await answerYes(api, box.state, dispatch)
     expect(box.state.messages.at(-1)).toEqual({ role: 'agent', text: "I couldn't reach the bank. No money was moved." })
+  })
+
+  it('a failed tap never claims nothing moved when the bank cannot be asked again', async () => {
+    const { api, box, dispatch } = await pending85()
+    vi.spyOn(api, 'confirmTransfer').mockRejectedValue(new TypeError('fetch failed'))
+    vi.spyOn(api, 'getCurrentTransfer').mockRejectedValue(new TypeError('fetch failed'))
+    const result = await answerYes(api, box.state, dispatch)
+    expect(result).not.toContain('No money was moved')
+    expect(result).toContain('not sure that payment went through')
+  })
+
+  it('a payment the bank is unsure about is reported as unsure, not as failed', async () => {
+    const { api, box, dispatch } = await pending85()
+    const t = box.state.transfer!
+    vi.spyOn(api, 'confirmTransfer').mockRejectedValue(new ApiError("I'm not sure that payment went through."))
+    vi.spyOn(api, 'getCurrentTransfer').mockResolvedValue({ ...t, status: 'unknown' })
+    const result = await answerYes(api, box.state, dispatch)
+    expect(result).not.toContain('No money was moved')
+    expect(box.state.panel).toBe('unsure')
+    // A second tap on the same request doesn't claim nothing moved either.
+    expect(await answerNo(api, box.state, dispatch)).not.toContain('No money was moved')
   })
 
   it('a refused tap shows a message in the chat', async () => {

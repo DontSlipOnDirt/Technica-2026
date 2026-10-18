@@ -19,12 +19,15 @@ for _name in ("httpx", "httpcore"):
 
 class NessieApiError(Exception):
     """A Nessie request failed. The message never includes Nessie's response body.
-    detail holds only Nessie's own JSON "message"/"culprit", for the server logs."""
+    detail holds only Nessie's own JSON "message"/"culprit", for the server logs.
+    outcome_unknown: the request may have reached Nessie and taken effect (a timeout,
+    a dropped connection, or a 5xx), so nobody can say whether money moved."""
 
-    def __init__(self, message: str, status: int, detail: str = ""):
+    def __init__(self, message: str, status: int, detail: str = "", outcome_unknown: bool = False):
         super().__init__(message)
         self.status = status
         self.detail = detail
+        self.outcome_unknown = outcome_unknown
 
 
 def _error_detail(response: httpx.Response, api_key: str) -> str:
@@ -73,14 +76,16 @@ class NessieClient:
         try:
             response = self._http.request(method, f"{self._base_url}{path}", params=query,
                                           json=body, headers={"Accept": "application/json"})
+        except (httpx.ConnectError, httpx.ConnectTimeout):
+            raise NessieApiError("Couldn't reach Nessie", 503)   # Never got there.
         except httpx.TimeoutException:
-            raise NessieApiError("Nessie request timed out", 408)
+            raise NessieApiError("Nessie request timed out", 408, outcome_unknown=True)
         except httpx.HTTPError:
-            raise NessieApiError("Couldn't reach Nessie", 503)
+            raise NessieApiError("Couldn't reach Nessie", 503, outcome_unknown=True)
 
         if response.status_code >= 400:
             raise NessieApiError(f"Nessie request failed with status {response.status_code}", response.status_code,
-                                 _error_detail(response, self._api_key))
+                                 _error_detail(response, self._api_key), outcome_unknown=response.status_code >= 500)
         if not response.content:
             return None
         try:
