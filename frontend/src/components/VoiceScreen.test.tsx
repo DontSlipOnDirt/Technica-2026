@@ -50,6 +50,18 @@ describe('VoiceScreen', () => {
     expect(screen.getByRole('button', { name: button })).toBeInTheDocument()
   })
 
+  it('asks about part of a bill as part of it', () => {
+    show(stateWith(transfer({ amount: 200, amount_owed: 600 })))
+    expect(screen.getByText('Pay $200.00 of the $600.00 Pepco bill from Checking?')).toBeInTheDocument()
+  })
+
+  it('tells her to check her balance when the bank is unsure', () => {
+    show(stateWith(transfer({ status: 'unknown' })))
+    expect(screen.getByRole('alert')).toHaveTextContent("We're not sure this went through.")
+    expect(screen.getByRole('status')).toHaveTextContent('Please check your balance')
+    expect(screen.queryByRole('button', { name: /Yes/ })).not.toBeInTheDocument()
+  })
+
   it.each([
     { payee_name: 'Travel', question: 'Open a new Savings account called Travel?' },
     { payee_name: 'Savings', question: 'Open a new Savings account?' },

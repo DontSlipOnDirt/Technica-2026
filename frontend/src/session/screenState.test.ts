@@ -34,6 +34,19 @@ describe('screenReducer', () => {
     expect(state.sentText).toBe(message)
   })
 
+  it('never calls part of a bill "your bill"', () => {
+    const state = withTransfer(transfer({ amount: 200, amount_owed: 600, status: 'executed' }))
+    expect(state.sentText).toBe('$200.00 has been paid toward your Pepco bill. $400.00 is still due.')
+    const full = withTransfer(transfer({ amount: 600, amount_owed: 600, status: 'executed' }))
+    expect(full.sentText).toBe('Your Pepco bill of $600.00 has been sent.')
+  })
+
+  it('a payment the bank is unsure about shows the unsure panel', () => {
+    const state = withTransfer(transfer({ status: 'unknown' }))
+    expect(state.panel).toBe('unsure')
+    expect(state.sentText).toBeNull()
+  })
+
   it('says a newly opened account is open', () => {
     const state = withTransfer(transfer({
       kind: 'new_account', amount: 0, payee_name: 'Travel', account_type: 'Savings', status: 'executed',

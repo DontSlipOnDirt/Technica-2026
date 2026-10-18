@@ -6,7 +6,8 @@
 
 import json
 import os
-from typing import Any, Callable, Optional, Tuple
+from datetime import datetime
+from typing import Any, Callable, List, Optional, Tuple
 
 import anyio
 from mcp.server.mcpserver import MCPServer
@@ -15,7 +16,7 @@ from starlette.middleware.cors import CORSMiddleware
 from starlette.requests import Request
 from starlette.responses import JSONResponse
 
-from bank import Bank, BankError, account_phrase
+from bank import Bank, BankError, PaymentUnknown, account_phrase
 
 NO_MONEY_MOVED = "No money was moved."
 
@@ -49,6 +50,38 @@ def _count(n: int, noun: str) -> str:
     return f"{n} {noun}{'' if n == 1 else 's'}"
 
 
+def _money(amount: Any) -> str:
+    return f"${float(amount or 0):,.2f}"
+
+
+def _day(date: Any) -> str:
+    """'2026-10-17' -> 'October 17', the way the agent should say it."""
+    try:
+        d = datetime.strptime(str(date)[:10], "%Y-%m-%d")
+    except ValueError:
+        return ""
+    return f"{d:%B} {d.day}"
+
+
+def _on(date: Any) -> str:
+    day = _day(date)
+    return f" on {day}" if day else ""
+
+
+def _and(items: List[str]) -> str:
+    """'a', 'a and b', 'a, b, and c'."""
+    return items[0] if len(items) == 1 else f"{', '.join(items[:-1])}{',' if len(items) > 2 else ''} and {items[-1]}"
+
+
+def _newest(noun: str, items: List[str], extra: str = "") -> str:
+    """Name up to three items aloud, newest first, and say how many more there are."""
+    how_many = noun if len(items) == 1 else _count(len(items), noun)
+    said = f"Your last {how_many}{extra}: {_and(items[:3])}."
+    if len(items) > 3:
+        said += f" I can read the other {len(items) - 3}."
+    return said
+
+
 def create_app(bank: Bank, allowed_origins: Optional[list] = None) -> Tuple[MCPServer, Starlette]:
     mcp = MCPServer(name="capital-one-voice", instructions=INSTRUCTIONS)
 
@@ -64,7 +97,9 @@ def create_app(bank: Bank, allowed_origins: Optional[list] = None) -> Tuple[MCPS
         return json.dumps({"ok": True, "say": say, **data})
 
     def failed(err: BankError, money_tool: bool) -> str:
-        say = f"{err} {NO_MONEY_MOVED}" if money_tool else str(err)
+        # "No money was moved" only when that's certain.
+        sure = money_tool and not isinstance(err, PaymentUnknown)
+        say = f"{err} {NO_MONEY_MOVED}" if sure else str(err)
         return json.dumps({"ok": False, "error": str(err), "say": say})
 
     # ---- Read tools ----
@@ -99,35 +134,40 @@ def create_app(bank: Bank, allowed_origins: Optional[list] = None) -> Tuple[MCPS
         store = f" from {merchant_name.strip()}" if merchant_name.strip() else ""
         if not purchases:
             return ok(f"I don't see any purchases{store}.", purchases=purchases)
-        if len(purchases) == 1:
-            return ok(f"Here is your last purchase{store}.", purchases=purchases)
-        return ok(f"Here are your last {len(purchases)} purchases{store}.", purchases=purchases)
+        items = [f"{p['description'] or 'a purchase'} for {_money(p['amount'])}{_on(p['date'])}" for p in purchases]
+        return ok(_newest("purchase", items, store), purchases=purchases)
 
-    async def latest(fn: Callable[..., Any], noun: str, account_name: str, limit: int) -> str:
-        """Deposits, withdrawals, or transfers, newest first."""
+    def cash_item(row: dict) -> str:
+        return f"{row['description'] or 'no description'} for {_money(row['amount'])}{_on(row['date'])}"
+
+    def transfer_item(row: dict) -> str:
+        to = f" to {row['to']}" if row["to"] else (f" for {row['description']}" if row["description"] else "")
+        return f"{_money(row['amount'])}{to}{_on(row['date'])}"
+
+    async def latest(fn: Callable[..., Any], noun: str, item: Callable[[dict], str],
+                     account_name: str, limit: int) -> str:
+        """Deposits, withdrawals, or transfers, newest first, with the first few read aloud."""
         try:
             rows = await _run(fn, account_name, limit)
         except BankError as err:
             return failed(err, money_tool=False)
         if not rows:
-            return ok(f"I don't see any {noun}.", **{noun: rows})
-        if len(rows) == 1:
-            return ok(f"Here is your last {noun[:-1]}.", **{noun: rows})
-        return ok(f"Here are your last {len(rows)} {noun}.", **{noun: rows})
+            return ok(f"I don't see any {noun}s.", **{f"{noun}s": rows})
+        return ok(_newest(noun, [item(r) for r in rows]), **{f"{noun}s": rows})
 
     @tool((
         "Money put into the customer's accounts, newest first. Optional account_name (e.g. 'savings'). "
         "Replies with JSON: ok, say, deposits (account, description, amount, date, status)."
     ))
     async def get_deposits(account_name: str = "", limit: int = 10) -> str:
-        return await latest(bank.deposits, "deposits", account_name, limit)
+        return await latest(bank.deposits, "deposit", cash_item, account_name, limit)
 
     @tool((
         "Money taken out of the customer's accounts (cash, bill and loan payments), newest first. "
         "Optional account_name. Replies with JSON: ok, say, withdrawals (account, description, amount, date, status)."
     ))
     async def get_withdrawals(account_name: str = "", limit: int = 10) -> str:
-        return await latest(bank.withdrawals, "withdrawals", account_name, limit)
+        return await latest(bank.withdrawals, "withdrawal", cash_item, account_name, limit)
 
     @tool((
         "Transfers the customer made, to people or between their own accounts, newest first. Optional account_name. "
@@ -135,7 +175,7 @@ def create_app(bank: Bank, allowed_origins: Optional[list] = None) -> Tuple[MCPS
         "'from' and 'to' are account or payee names, or null when unknown."
     ))
     async def get_transfers(account_name: str = "", limit: int = 10) -> str:
-        return await latest(bank.transfers, "transfers", account_name, limit)
+        return await latest(bank.transfers, "transfer", transfer_item, account_name, limit)
 
     @tool((
         "The customer's bills, soonest first. By default only bills still due; include_paid=true adds paid and "
@@ -152,8 +192,9 @@ def create_app(bank: Bank, allowed_origins: Optional[list] = None) -> Tuple[MCPS
         if include_paid:
             say = f"I found {_count(len(bills), label)}." if bills else f"I don't see any {label}s."
         elif bills:
-            listed = ", ".join(f"{b['biller_name']} for ${float(b['amount'] or 0):,.2f}" for b in bills)
-            say = f"You have {_count(len(bills), label)} due: {listed}."
+            due = [f"{b['biller_name']} for {_money(b['amount'])}"
+                   + (f", due {_day(b['due_date'])}" if _day(b["due_date"]) else "") for b in bills]
+            say = f"You have {_count(len(bills), label)} due: {_and(due)}."
         else:
             say = f"You have no {label}s due."
         return ok(say, bills=bills)
@@ -274,7 +315,11 @@ def create_app(bank: Bank, allowed_origins: Optional[list] = None) -> Tuple[MCPS
                 "deposit": f"added to your {account} account",
                 "own_transfer": f"moved from your {account} account to your {account_phrase(payee)} account",
                 "loan": f"paid toward your {payee.lower()}"}.get(t["kind"], f"sent to {payee}")
-        return ok(f"Done. ${t['amount']:,.2f} has been {what}. Is there anything else I can help with?", transfer=t)
+        owed = t.get("amount_owed")
+        rest = (f" {_money(owed - t['amount'])} is still due."
+                if t["kind"] == "bill" and owed is not None and t["amount"] < owed else "")
+        return ok(f"Done. ${t['amount']:,.2f} has been {what}.{rest} Is there anything else I can help with?",
+                  transfer=t)
 
     @tool("Cancel the request that is waiting for a yes, when the customer says no. Replies with JSON.")
     async def cancel_payment(transfer_id: str) -> str:

@@ -72,6 +72,31 @@ def test_timeouts_become_nessie_errors():
     assert err.value.status == 408
 
 
+@pytest.mark.parametrize("answer, unknown", [
+    (lambda request: httpx.Response(400, json={"message": "bad amount"}), False),   # Refused: nothing happened.
+    (lambda request: httpx.Response(500, text="oops"), True),                       # It may have half-run.
+])
+def test_only_a_refusal_means_the_payment_did_not_happen(answer, unknown):
+    with pytest.raises(NessieApiError) as err:
+        client_with(answer).post("/accounts/a1/transfers", {"amount": 50})
+    assert err.value.outcome_unknown is unknown
+
+
+@pytest.mark.parametrize("failure, unknown", [
+    (httpx.ConnectError, False),   # Never reached Nessie.
+    (httpx.ConnectTimeout, False),
+    (httpx.ReadTimeout, True),     # Sent, but no answer came back.
+    (httpx.RemoteProtocolError, True),
+])
+def test_a_lost_answer_is_an_unknown_outcome(failure, unknown):
+    def handler(request):
+        raise failure("lost", request=request)
+
+    with pytest.raises(NessieApiError) as err:
+        client_with(handler).post("/accounts/a1/transfers", {"amount": 50})
+    assert err.value.outcome_unknown is unknown
+
+
 def test_params_are_passed_through():
     seen = {}
 

@@ -6,6 +6,7 @@ from starlette.testclient import TestClient
 import fraud_check
 from app import create_app
 from bank import Bank
+from nessie import NessieApiError
 from test_bank import ACCOUNT, CONFIG, SAVINGS, FakeNessie, auto_loan
 
 
@@ -269,7 +270,7 @@ async def test_history_tools_reply_with_json(setup):
     nessie, _, mcp, _ = setup
     nessie.deposits = [{"amount": 1450, "transaction_date": "2026-10-03", "description": "Social Security"}]
     deposits = tool_json(await mcp.call_tool("get_deposits", {}))
-    assert deposits["say"] == "Here is your last deposit."
+    assert deposits["say"] == "Your last deposit: Social Security for $1,450.00 on October 3."
     assert deposits["deposits"][0]["amount"] == 1450
     withdrawals = tool_json(await mcp.call_tool("get_withdrawals", {"account_name": "savings"}))
     assert withdrawals == {"ok": True, "say": "I don't see any withdrawals.", "withdrawals": []}
@@ -287,7 +288,7 @@ async def test_an_unknown_account_name_is_a_sentence(setup):
 async def test_purchases_by_merchant_and_merchant_lookup(setup):
     _, _, mcp, _ = setup
     reply = tool_json(await mcp.call_tool("get_recent_purchases", {"merchant_name": "Giant"}))
-    assert reply["say"] == "Here is your last purchase from Giant."
+    assert reply["say"] == "Your last purchase from Giant: Giant for $86.40 on October 15."
     assert reply["purchases"][0]["amount"] == 86.40
     found = tool_json(await mcp.call_tool("find_merchant", {"name": "giant"}))
     assert found["say"] == "I found Giant Food, at 4500 Knox Rd, College Park, MD 20740."
@@ -336,6 +337,43 @@ async def test_create_account_needs_a_yes(setup):
     assert done["say"] == "Done. Your new savings account is open. Is there anything else I can help with?"
     assert nessie.posted == [("/customers/cust-rose/accounts",
                               {"type": "Savings", "nickname": "Travel", "rewards": 0, "balance": 0})]
+
+
+async def test_part_of_a_bill_says_what_is_still_due(setup):
+    _, _, mcp, _ = setup
+    reply = tool_json(await mcp.call_tool("pay_bill", {"biller_name": "Pepco", "amount": 200}))
+    done = tool_json(await mcp.call_tool("confirm_payment", {"transfer_id": reply["transfer"]["transfer_id"]}))
+    assert done["say"] == ("Done. $200.00 has been sent to Pepco. $400.00 is still due. "
+                           "Is there anything else I can help with?")
+
+
+async def test_an_unknown_outcome_never_says_no_money_moved(setup):
+    nessie, _, mcp, _ = setup
+    nessie.fail_paths["/transfers"] = NessieApiError("Nessie request timed out", 408, outcome_unknown=True)
+    reply = tool_json(await mcp.call_tool("request_transfer", {"payee_name": "Maria", "amount": 50}))
+    done = tool_json(await mcp.call_tool("confirm_payment", {"transfer_id": reply["transfer"]["transfer_id"]}))
+    assert done["ok"] is False
+    assert "not sure that payment went through" in done["say"]
+    assert "No money was moved" not in done["say"]
+
+
+async def test_read_replies_name_the_details_not_just_a_count(setup):
+    nessie, _, mcp, _ = setup
+    nessie.purchases = [
+        {"amount": 54.20, "purchase_date": "2026-10-17", "description": "Fresh Market"},
+        {"amount": 18.75, "purchase_date": "2026-10-16", "description": "CVS Pharmacy"},
+        {"amount": 9.50, "purchase_date": "2026-10-14", "description": "Corner Cafe [cat:Food]"},
+        {"amount": 71.10, "purchase_date": "2026-10-09", "description": "Fresh Market"},
+    ]
+    nessie.bills[0]["payment_date"] = "2026-10-24"
+    purchases = tool_json(await mcp.call_tool("get_recent_purchases", {"limit": 5}))
+    assert purchases["say"] == ("Your last 4 purchases: Fresh Market for $54.20 on October 17, CVS Pharmacy for "
+                                "$18.75 on October 16, and Corner Cafe for $9.50 on October 14. "
+                                "I can read the other 1.")
+    bills = tool_json(await mcp.call_tool("get_bills", {}))
+    assert bills["say"] == "You have 1 bill due: Pepco for $600.00, due October 24."
+    transfers = tool_json(await mcp.call_tool("get_transfers", {}))
+    assert transfers["say"] == "Your last transfer: $100.00 to Maria on October 1."
 
 
 def test_the_screen_sees_which_kind_of_request_is_waiting(setup):

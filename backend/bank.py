@@ -9,7 +9,8 @@ import logging
 import math
 import re
 import threading
-from dataclasses import dataclass, field
+import time
+from dataclasses import dataclass, field, replace
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -30,9 +31,19 @@ NEW_ACCOUNT = "new-account"
 # Everyday words for Nessie's loan types ("home", "auto", "small business").
 _LOAN_WORDS = {"car": "auto", "house": "home", "mortgage": "home"}
 
+# The screen posts what she says while the agent is already calling a tool, so a payment
+# request can arrive before the words that led to it. A line newer than WORDS_FRESH_S is
+# taken to be those words; otherwise the request waits up to WORDS_WAIT_S for them.
+WORDS_FRESH_S = 4.0
+WORDS_WAIT_S = 2.0
+
 
 class BankError(Exception):
     """Something the customer should hear about. The message is safe to read aloud."""
+
+
+class PaymentUnknown(BankError):
+    """Nessie may or may not have moved the money. Never say no money moved, and never retry."""
 
 
 @dataclass
@@ -130,8 +141,10 @@ class Bank:
         self._nessie = nessie
         self._config = config
         self._lock = threading.Lock()
+        self._words_arrived = threading.Condition(self._lock)
         self._conversation_id: Optional[str] = None
         self._lines: List[str] = []
+        self._last_line_at: Optional[float] = None   # time.monotonic() of the newest line
         self._transfers: Dict[str, Dict[str, Any]] = {}
         self._private: Dict[str, Dict[str, Any]] = {}   # transfer_id -> what Nessie needs to send it
         self._current_id: Optional[str] = None
@@ -143,14 +156,25 @@ class Bank:
 
     def add_transcript_line(self, conversation_id: str, text: str) -> None:
         """The app forwards every finished user line. A new conversation starts a fresh transcript."""
-        with self._lock:
+        with self._words_arrived:
             if conversation_id != self._conversation_id:
                 self._conversation_id = conversation_id
                 self._lines = []
             self._lines.append(text)
+            self._last_line_at = time.monotonic()
+            self._words_arrived.notify_all()
             said = " ".join(self._lines)
         # Check what they've said so far while they keep talking; request_transfer reuses it.
         gemini_signals.prefetch(said)
+
+    def _wait_for_words(self) -> None:
+        """Give the screen a moment to send the words behind this request. Only when a screen
+        is sending lines at all; without one (testing the agent alone) there's nothing to wait for."""
+        with self._words_arrived:
+            seen = self._last_line_at
+            if seen is None or time.monotonic() - seen < WORDS_FRESH_S:
+                return
+            self._words_arrived.wait_for(lambda: self._last_line_at != seen, timeout=WORDS_WAIT_S)
 
     # ---- Requests (from the agent) ----------------------------------------------
 
@@ -237,6 +261,7 @@ class Bank:
         accounts = self._accounts() if accounts is None else accounts
         source = self._by_id(source_id, accounts)
         history = self._history(source, accounts, payee_id)
+        self._wait_for_words()
         with self._lock:
             request = TransferRequest(
                 from_account_id=source_id,
@@ -278,10 +303,13 @@ class Bank:
             }
             if kind == "new_account":
                 transfer["account_type"] = details["account_type"]
+            if kind in ("bill", "loan"):
+                transfer["amount_owed"] = details["owed"]
             transfer["spoken_message"] = self._spoken(transfer, careful=decision.decision == "confirm")
             self._transfers[transfer["transfer_id"]] = transfer
-            self._private[transfer["transfer_id"]] = {"source_id": source_id, "payee_id": payee_id,
-                                                      "memo": memo, **details}
+            # The request and history are kept so the yes can be checked again against anything said since.
+            self._private[transfer["transfer_id"]] = {"source_id": source_id, "payee_id": payee_id, "memo": memo,
+                                                      "request": request, "history": history, **details}
             self._current_id = transfer["transfer_id"]
             return dict(transfer)
 
@@ -318,6 +346,9 @@ class Bank:
             return f"I'll move {money} from your {account} account to your {account_phrase(payee)} account. Are you sure?"
         if kind == "loan":
             return f"I'll pay {money} toward your {payee.lower()} from your {account} account. Are you sure?"
+        if kind == "bill" and t["amount_owed"] is not None and t["amount"] < t["amount_owed"]:
+            return (f"I'll pay {money} of your ${t['amount_owed']:,.2f} {payee} bill from your {account} account. "
+                    "The rest stays due. Are you sure?")
         if kind == "new_account":
             called = "" if payee == t["account_type"] else f" called {payee}"
             return f"I'll open a new {t['account_type'].lower()} account{called}, with a $0.00 balance. Are you sure?"
@@ -332,16 +363,48 @@ class Bank:
                 raise BankError("I couldn't find that payment.")
             if t["status"] == "executed":
                 return dict(t)   # Already sent; never send twice.
+            if t["status"] == "unknown":
+                raise PaymentUnknown(self._unsure(t))   # It may have gone through; never risk sending twice.
             if t["status"] != "awaiting_yes" or not fraud_check.is_cleared_to_send(transfer_id):
                 raise BankError("That payment can't be sent.")
+            p = self._private[transfer_id]
+            if self._held_on_second_look(t, p):
+                raise BankError(t["spoken_message"])
             try:
-                self._send(t, self._private[transfer_id])
+                self._send(t, p)
+            except PaymentUnknown:
+                t["status"] = "unknown"
+                raise
             except NessieApiError as err:
                 log.warning("Nessie payment for %s failed with status %s: %s", transfer_id, err.status, err.detail)
+                if err.outcome_unknown:
+                    t["status"] = "unknown"
+                    raise PaymentUnknown(self._unsure(t))
                 raise BankError("I couldn't open that account." if t["kind"] == "new_account"
                                 else "I couldn't complete that payment.")
             t["status"] = "executed"
             return dict(t)
+
+    def _held_on_second_look(self, t: Dict[str, Any], p: Dict[str, Any]) -> bool:
+        """Check the request again if she has said more since it was checked, or her words reached
+        us late. A hold now stops it before any money moves. Call with the lock held."""
+        said = " ".join(self._lines)
+        if said == p["request"].user_said:
+            return False
+        decision = fraud_check.check_transfer(replace(p["request"], user_said=said), p["history"])
+        if not (decision.decision == "hold" or (t["kind"] == "new_account" and decision.decision == "confirm")):
+            return False
+        self._held_payees.add(p["payee_id"])
+        t.update(status="held", decision="hold", risk_score=decision.risk_score, reasons=list(decision.reasons))
+        t["spoken_message"] = self._spoken(t, careful=False)
+        return True
+
+    @staticmethod
+    def _unsure(t: Dict[str, Any]) -> str:
+        if t["kind"] == "new_account":
+            return "I'm not sure the account was opened. Please check your accounts before trying again."
+        return ("I'm not sure that payment went through. Please don't try it again yet. "
+                "Check your balance first, or call Capital One.")
 
     def _send(self, t: Dict[str, Any], p: Dict[str, Any]) -> None:
         """The Nessie calls for a request that got its yes. The first call moves the money, so if it
@@ -366,8 +429,15 @@ class Bank:
             })
             if kind == "own_transfer":
                 # With no payee field the transfer can't credit her other account, so a deposit does.
-                self._follow_up("post", f"/accounts/{p['payee_id']}/deposits",
-                                cash(f"Transfer from {t['from_account_name']}"))
+                try:
+                    self._nessie.post(f"/accounts/{p['payee_id']}/deposits", cash(f"Transfer from {t['from_account_name']}"))
+                except NessieApiError as err:
+                    log.warning("Nessie deposit for %s failed after the money left, status %s: %s",
+                                t["transfer_id"], err.status, err.detail)
+                    raise PaymentUnknown(
+                        f"The money left your {account_phrase(t['from_account_name'])} account, but I couldn't "
+                        f"confirm it reached your {account_phrase(t['payee_name'])} account. Please don't try it "
+                        "again; call Capital One so they can check it.")
         elif kind == "bill":
             self._nessie.post(f"/accounts/{source}/withdrawals", cash(f"Bill payment: {t['payee_name']}"))
             left = None if p["owed"] is None else round(p["owed"] - amount, 2)
@@ -402,6 +472,8 @@ class Bank:
                 raise BankError("I couldn't find that payment.")
             if t["status"] == "executed":
                 raise BankError("That payment was already sent.")
+            if t["status"] == "unknown":
+                raise PaymentUnknown(self._unsure(t))
             if t["status"] == "awaiting_yes":
                 t["status"] = "cancelled"
             return dict(t)

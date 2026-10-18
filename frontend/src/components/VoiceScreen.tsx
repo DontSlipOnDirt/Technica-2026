@@ -5,6 +5,7 @@ import { ConfirmPanel } from './ConfirmPanel'
 import { MicOrb, type VoicePhase } from './MicOrb'
 import { ScamBox } from './ScamBox'
 import { SentBox } from './SentBox'
+import { UnsureBox } from './UnsureBox'
 
 export interface VoiceScreenProps {
   state: ScreenState
@@ -28,6 +29,7 @@ const STOPPED: Record<Kind, string> = {
 
 function statusLine(state: ScreenState, phase?: VoicePhase, micMuted?: boolean): string {
   if (state.panel === 'blocked') return STOPPED[state.transfer?.kind ?? 'transfer']
+  if (state.panel === 'unsure') return 'Please check your balance'
   if (phase === 'connecting') return 'Connecting…'
   if (phase === 'paused') return 'Microphone paused — tap to listen'
   if (phase === 'waiting') return 'Waiting for a reply…'
@@ -56,6 +58,7 @@ export function VoiceScreen({ state, phase, micMuted, getAudioLevel, onMicTap, o
       )}
       {panel === 'sent' && state.sentText && <SentBox text={state.sentText} />}
       {panel === 'blocked' && transfer && <ScamBox transfer={transfer} />}
+      {panel === 'unsure' && <UnsureBox />}
 
       <Chat messages={state.messages} />
     </main>

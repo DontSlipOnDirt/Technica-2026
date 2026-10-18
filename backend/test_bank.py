@@ -1,9 +1,12 @@
 import json
+import threading
+import time
 
 import pytest
 
+import bank as bank_module
 import fraud_check
-from bank import Bank, BankError, DemoConfig
+from bank import Bank, BankError, DemoConfig, PaymentUnknown
 from gemini_signals import GeminiUnavailable
 from nessie import NessieApiError
 
@@ -37,6 +40,7 @@ class FakeNessie:
                                  "address": {"street_number": "4500", "street_name": "Knox Rd",
                                              "city": "College Park", "state": "MD", "zip": "20740"}}}
         self.more_accounts = []
+        self.fail_paths = {}   # path ending -> the NessieApiError a POST there raises
         self.posted = []
         self.puts = []
 
@@ -60,7 +64,10 @@ class FakeNessie:
 
     def post(self, path, body):
         if self.fail_posts:
-            raise NessieApiError("Nessie request failed with status 500", 500)
+            raise NessieApiError("Nessie request failed with status 400", 400)   # Refused: nothing moved.
+        for ending, error in self.fail_paths.items():
+            if path.endswith(ending):
+                raise error
         self.posted.append((path, body))
         if path == "/customers/cust-rose/accounts":
             self.more_accounts.append({"_id": "acct-new", **body})
@@ -536,7 +543,9 @@ def test_part_of_a_bill_can_be_paid_and_the_rest_stays_due():
     nessie = FakeNessie()
     bank = Bank(nessie, CONFIG)
     t = bank.pay_bill("Pepco", 200)
-    assert t["amount"] == 200
+    assert (t["amount"], t["amount_owed"]) == (200, 600)
+    assert t["spoken_message"] == ("I'll pay $200.00 of your $600.00 Pepco bill from your checking account. "
+                                   "The rest stays due. Are you sure?")
     bank.confirm(t["transfer_id"])
     assert nessie.posted == [(f"/accounts/{ACCOUNT}/withdrawals", {
         "medium": "balance", "amount": 200, "transaction_date": "2026-10-17", "description": "Bill payment: Pepco"})]
@@ -663,3 +672,101 @@ def test_an_account_opened_here_is_still_a_new_payee():
     new = "This is someone you haven't sent money to before"
     assert new in bank.transfer_between_accounts("checking", "travel", 100)["reasons"]
     assert new not in bank.transfer_between_accounts("checking", "rainy day", 100)["reasons"]
+
+
+# ---- Her words reach the scam check before money moves ------------------------------
+
+SCAM_WORDS = "the fraud department says move it to a safe account right now"
+
+
+def test_a_payment_waits_for_the_words_that_asked_for_it(monkeypatch):
+    # The agent's tool call can beat the screen's post of what she just said.
+    monkeypatch.setattr(bank_module, "WORDS_FRESH_S", 0.0)   # Every earlier line counts as old.
+    bank = make_bank()
+    bank.add_transcript_line("c1", "hello")
+    late = threading.Timer(0.2, bank.add_transcript_line, ("c1", SCAM_WORDS))
+    late.start()
+    t = bank.request_transfer("Bob", 900)
+    late.join()
+    assert t["status"] == "held"
+
+
+def test_with_no_new_words_a_payment_goes_ahead_after_a_short_wait(monkeypatch):
+    monkeypatch.setattr(bank_module, "WORDS_FRESH_S", 0.0)
+    monkeypatch.setattr(bank_module, "WORDS_WAIT_S", 0.05)
+    bank = make_bank()
+    bank.add_transcript_line("c1", "send fifty dollars to Maria")
+    assert bank.request_transfer("Maria", 50)["status"] == "awaiting_yes"
+
+
+def test_fresh_words_or_no_screen_means_no_wait(monkeypatch):
+    monkeypatch.setattr(bank_module, "WORDS_WAIT_S", 30)
+    start = time.monotonic()
+    make_bank().request_transfer("Maria", 50)          # No screen has sent anything.
+    bank = make_bank()
+    bank.add_transcript_line("c1", "send fifty dollars to Maria")
+    bank.request_transfer("Maria", 50)                 # Her words just arrived.
+    assert time.monotonic() - start < 5
+
+
+def test_scam_words_after_the_request_stop_it_at_the_yes():
+    nessie = FakeNessie()
+    bank = Bank(nessie, CONFIG)
+    bank.add_transcript_line("c1", "send nine hundred dollars to Bob")
+    t = bank.request_transfer("Bob", 900)
+    assert t["status"] == "awaiting_yes"
+    bank.add_transcript_line("c1", "yes, the fraud department told me to hurry")
+    with pytest.raises(BankError, match="I've stopped this payment to keep your money safe"):
+        bank.confirm(t["transfer_id"])
+    assert (bank.current()["status"], bank.current()["decision"]) == ("held", "hold")
+    assert nessie.posted == []
+    assert bank.request_transfer("Bob", 5)["status"] == "held"
+
+
+def test_a_plain_yes_still_sends():
+    nessie = FakeNessie()
+    bank = Bank(nessie, CONFIG)
+    bank.add_transcript_line("c1", "send fifty dollars to Maria")
+    t = bank.request_transfer("Maria", 50)
+    bank.add_transcript_line("c1", "yes please")
+    assert bank.confirm(t["transfer_id"])["status"] == "executed"
+
+
+# ---- When nobody knows whether the money moved --------------------------------------
+
+def test_a_timeout_on_the_yes_is_unknown_and_never_retried():
+    nessie = FakeNessie()
+    nessie.fail_paths["/transfers"] = NessieApiError("Nessie request timed out", 408, outcome_unknown=True)
+    bank = Bank(nessie, CONFIG)
+    t = bank.request_transfer("Maria", 50)
+    with pytest.raises(PaymentUnknown, match="not sure that payment went through"):
+        bank.confirm(t["transfer_id"])
+    assert bank.current()["status"] == "unknown"
+    nessie.fail_paths.clear()
+    with pytest.raises(PaymentUnknown):
+        bank.confirm(t["transfer_id"])   # It may have gone through: never send it a second time.
+    with pytest.raises(PaymentUnknown):
+        bank.cancel(t["transfer_id"])
+    assert nessie.posted == []
+
+
+def test_a_refused_payment_is_known_not_to_have_moved():
+    nessie = FakeNessie()
+    nessie.fail_paths["/withdrawals"] = NessieApiError("Nessie request failed with status 400", 400)
+    bank = Bank(nessie, CONFIG)
+    t = bank.withdraw(40)
+    with pytest.raises(BankError) as err:
+        bank.confirm(t["transfer_id"])
+    assert not isinstance(err.value, PaymentUnknown)
+    assert bank.current()["status"] == "awaiting_yes"
+
+
+def test_money_that_left_but_did_not_arrive_is_reported_honestly():
+    nessie = FakeNessie()
+    nessie.fail_paths["/deposits"] = NessieApiError("Nessie request failed with status 400", 400)
+    bank = Bank(nessie, CONFIG)
+    t = bank.transfer_between_accounts("checking", "savings", 100)
+    with pytest.raises(PaymentUnknown, match="left your checking account, but I couldn't confirm it reached"):
+        bank.confirm(t["transfer_id"])
+    assert bank.current()["status"] == "unknown"
+    assert [path for path, _ in nessie.posted] == [f"/accounts/{ACCOUNT}/transfers"]

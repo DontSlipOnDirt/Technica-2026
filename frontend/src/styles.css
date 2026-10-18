@@ -194,6 +194,20 @@ body {
   border-radius: 12px;
 }
 
+/* The bank couldn't say whether it went through */
+.unsure {
+  margin: 4px 16px 12px;
+  padding: 14px;
+  text-align: center;
+  font-size: 18px;
+  font-weight: 600;
+  line-height: 1.4;
+  color: var(--warn-text);
+  background: var(--warn-bg);
+  border: 2px solid var(--warn-border);
+  border-radius: 12px;
+}
+
 /* Scam caught */
 .scam {
   margin: 4px 16px 12px;

@@ -3,7 +3,8 @@
 export type Decision = 'allow' | 'confirm' | 'hold'
 // own_transfer: between the customer's own accounts. new_account: opening one (amount 0, needs a yes too).
 export type Kind = 'transfer' | 'bill' | 'withdrawal' | 'deposit' | 'own_transfer' | 'loan' | 'new_account'
-export type TransferStatus = 'awaiting_yes' | 'held' | 'executed' | 'cancelled'
+// unknown: the bank couldn't tell whether the money moved. It is never sent again.
+export type TransferStatus = 'awaiting_yes' | 'held' | 'executed' | 'cancelled' | 'unknown'
 
 /** The transfer the backend is currently working on, as GET /api/transfer/current returns it. */
 export interface CurrentTransfer {
@@ -19,6 +20,8 @@ export interface CurrentTransfer {
   from_account_name: string
   /** new_account only: "Checking", "Savings", or "Credit Card". payee_name is the new account's nickname. */
   account_type?: string
+  /** bill and loan only: what was owed before this payment, or null if the bank doesn't say. */
+  amount_owed?: number | null
 }
 
 /** A backend error. The message is the backend's {"error": "..."} text. */

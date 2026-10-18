@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import type { CurrentTransfer } from '../api/types'
 import { formatMoney } from '../money'
+import { partialBill } from '../session/screenState'
 
 interface ConfirmPanelProps {
   transfer: CurrentTransfer
@@ -25,8 +26,13 @@ function describe(t: CurrentTransfer): { question: string; yesLabel: string } {
       const called = t.payee_name !== t.account_type ? ` called ${t.payee_name}` : ''
       return { question: `Open a new ${type}account${called}?`, yesLabel: '✓ Yes, open it' }
     }
-    case 'transfer':
     case 'bill':
+      if (partialBill(t)) {
+        const owed = formatMoney(t.amount_owed ?? 0)
+        return { question: `Pay ${money} of the ${owed} ${t.payee_name} bill from ${t.from_account_name}?`, yesLabel: '✓ Yes, pay it' }
+      }
+      return { question: `Pay ${t.payee_name} ${money} from ${t.from_account_name}?`, yesLabel: '✓ Yes, pay it' }
+    case 'transfer':
       return { question: `Pay ${t.payee_name} ${money} from ${t.from_account_name}?`, yesLabel: '✓ Yes, pay it' }
   }
 }

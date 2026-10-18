@@ -3,7 +3,8 @@
 import type { CurrentTransfer, TransferStatus } from '../api/types'
 import { formatMoney } from '../money'
 
-export type Panel = 'none' | 'confirming' | 'sent' | 'blocked'
+// unsure: the bank couldn't tell whether the money moved.
+export type Panel = 'none' | 'confirming' | 'sent' | 'blocked' | 'unsure'
 
 export interface ChatMessage {
   role: 'user' | 'agent'
@@ -39,6 +40,12 @@ const PANEL_FOR_STATUS: Record<TransferStatus, Panel> = {
   held: 'blocked',
   executed: 'sent',
   cancelled: 'none',
+  unknown: 'unsure',
+}
+
+/** True when a bill is being paid in part, so the screen never calls the part "your bill". */
+export function partialBill(transfer: CurrentTransfer): boolean {
+  return transfer.kind === 'bill' && transfer.amount_owed != null && transfer.amount < transfer.amount_owed
 }
 
 function sentText(transfer: CurrentTransfer): string {
@@ -49,6 +56,10 @@ function sentText(transfer: CurrentTransfer): string {
     case 'deposit':
       return `${money} has been deposited into ${transfer.from_account_name}.`
     case 'bill':
+      if (partialBill(transfer)) {
+        const left = formatMoney((transfer.amount_owed ?? 0) - transfer.amount)
+        return `${money} has been paid toward your ${transfer.payee_name} bill. ${left} is still due.`
+      }
       return `Your ${transfer.payee_name} bill of ${money} has been sent.`
     case 'transfer':
       return `${money} has been sent to ${transfer.payee_name}.`

@@ -61,7 +61,11 @@ Every tool replies with one JSON object:
 {"ok": false, "error": "That payment can't be sent.", "say": "That payment can't be sent. No money was moved."}
 ```
 
-The agent reads `say` aloud and passes `transfer.transfer_id` to `confirm_payment` or `cancel_payment`. `transfer.kind` is `transfer`, `own_transfer`, `bill`, `loan`, `withdrawal`, `deposit`, or `new_account` (which also has `account_type`). Read tools return `summary`, `accounts`, `purchases`, `deposits`, `withdrawals`, `transfers`, `bills`, `loans`, or `merchants` in place of `transfer`.
+**Her words reach the check in time.** The screen posts each finished line to `/api/transcript` while the agent is already calling a tool, so a request can arrive before the words behind it. If no line came in during the last 4 seconds, a request waits up to 2 seconds for one (`WORDS_FRESH_S` and `WORDS_WAIT_S` in `bank.py`). It only waits while a screen is sending lines. At the yes, if she has said anything since the request was checked, the check runs again, and a hold then stops it before any money moves.
+
+**"No money was moved" only when that's certain.** If Nessie refuses a payment (4xx), the request stays waiting for a yes. If the answer is lost (a timeout, a dropped connection, a 5xx), the status becomes `unknown`: it is never sent again, the reply asks her to check her balance, and the screen shows the same advice. A move between her accounts whose deposit fails after the money left is `unknown` too.
+
+The agent reads `say` aloud and passes `transfer.transfer_id` to `confirm_payment` or `cancel_payment`. `transfer.status` is `awaiting_yes`, `held`, `executed`, `cancelled`, or `unknown`; bill and loan payments also carry `amount_owed`. List tools put the three newest items, with amounts and dates, in `say`. `transfer.kind` is `transfer`, `own_transfer`, `bill`, `loan`, `withdrawal`, `deposit`, or `new_account` (which also has `account_type`). Read tools return `summary`, `accounts`, `purchases`, `deposits`, `withdrawals`, `transfers`, `bills`, `loans`, or `merchants` in place of `transfer`.
 
 ## App endpoints (for the screen)
 
