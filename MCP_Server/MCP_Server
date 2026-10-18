@@ -13,12 +13,14 @@ from mcp.server.mcpserver import MCPServer
 
 from typing import Literal
 
+import os
+
 import Transaction_Handler as Handler
 
 
 mcp = MCPServer("nessie-banking")
 
-CUSTOMER_ID = ""
+CUSTOMER_ID = str(os.environ.get("BASE_CUSTOMER_ID"))
 
 AccountType = Literal["Checking", "Savings", "Credit Card"]
 
