@@ -11,6 +11,7 @@ Run:
 """
 from mcp.server.mcpserver import MCPServer
 
+import os
 from typing import Literal
 
 import Transaction_Handler as Handler
@@ -149,4 +150,8 @@ def pay_loan(loan_id: str, from_account_id: str, amount: float) -> dict:
                             from_account_id=from_account_id, amount=amount)
 
 if __name__ == "__main__":
-    mcp.run(transport="streamable-http", host="0.0.0.0", port=8000)
+    mcp.run(
+        transport="streamable-http",
+        host="0.0.0.0",
+        port=int(os.environ.get("PORT", "8000")),
+    )
