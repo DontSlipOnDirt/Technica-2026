@@ -412,7 +412,8 @@ class Bank:
         kind, source, amount = t["kind"], p["source_id"], t["amount"]
 
         def cash(description: str) -> Dict[str, Any]:
-            return {"medium": "balance", "amount": amount, "transaction_date": self._today(),
+            # Nessie's DepositCreate (and WithdrawalCreate) refuse a request without a status.
+            return {"medium": "balance", "status": "completed", "amount": amount, "transaction_date": self._today(),
                     "description": description}
 
         if kind in ("withdrawal", "deposit"):
