@@ -6,10 +6,12 @@ export const CAPITAL_ONE_PHONE = '1-877-383-4802'
 
 /** Shown when the fraud check holds a transfer. Calling Capital One is the only way forward. */
 export function ScamBox({ transfer }: { transfer: CurrentTransfer }) {
+  const operation = transfer.kind === 'withdrawal' ? 'withdrawal'
+    : transfer.kind === 'deposit' ? 'deposit' : 'transfer'
   return (
     <section className="scam" role="alert">
       <h2 className="scam__title">This looks like a scam</h2>
-      <p>We stopped your {formatMoney(transfer.amount)} transfer. Your money has not moved.</p>
+      <p>We stopped your {formatMoney(transfer.amount)} {operation}. Your money has not moved.</p>
       {transfer.reasons.length > 0 && (
         <ul className="scam__reasons">
           {transfer.reasons.map((r) => <li key={r}>{r}</li>)}

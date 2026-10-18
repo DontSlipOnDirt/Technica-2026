@@ -33,6 +33,39 @@ function show(state: ScreenState, onYes = vi.fn(async () => {}), onNo = vi.fn(as
 }
 
 describe('VoiceScreen', () => {
+  it('offers Start listening while microphone input is paused', () => {
+    render(<VoiceScreen state={stateWith(null)} phase="paused" micMuted onMicTap={vi.fn()} onYes={vi.fn(async () => {})} onNo={vi.fn(async () => {})} />)
+    expect(screen.getByRole('status')).toHaveTextContent('Microphone paused — tap to listen')
+    expect(screen.getByRole('button', { name: 'Start listening' })).toBeInTheDocument()
+  })
+
+  it.each([
+    { kind: 'withdrawal' as const, question: 'Withdraw $1.00 from Checking?', button: '✓ Yes, withdraw' },
+    { kind: 'deposit' as const, question: 'Deposit $1.00 into Checking?', button: '✓ Yes, deposit' },
+  ])('describes a $kind confirmation accurately', ({ kind, question, button }) => {
+    show(stateWith(transfer({ kind, amount: 1, payee_name: 'cash' })))
+    expect(screen.getByText(question)).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: button })).toBeInTheDocument()
+  })
+
+  it.each([
+    { kind: 'withdrawal' as const, message: 'We stopped your $1.00 withdrawal. Your money has not moved.', status: 'Withdrawal stopped' },
+    { kind: 'deposit' as const, message: 'We stopped your $1.00 deposit. Your money has not moved.', status: 'Deposit stopped' },
+  ])('describes a held $kind accurately', ({ kind, message, status }) => {
+    show(stateWith(transfer({ kind, amount: 1, status: 'held', decision: 'hold' })))
+    expect(screen.getByText(message)).toBeInTheDocument()
+    expect(screen.getByRole('status')).toHaveTextContent(status)
+  })
+
+  it('shows the handoff and reply states after finishing a turn', () => {
+    const props = { state: stateWith(null), onMicTap: vi.fn(), onYes: vi.fn(async () => {}), onNo: vi.fn(async () => {}) }
+    const { rerender } = render(<VoiceScreen {...props} phase="waiting" />)
+    expect(screen.getByText('Waiting for a reply…')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Talk again' })).toBeInTheDocument()
+    rerender(<VoiceScreen {...props} phase="speaking" />)
+    expect(screen.getByText('Agent speaking…')).toBeInTheDocument()
+  })
+
   it('idle shows Tap to talk and the logo', () => {
     show(stateWith(null, false))
     expect(screen.getByText('Tap to talk')).toBeInTheDocument()

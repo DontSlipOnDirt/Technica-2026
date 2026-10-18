@@ -10,6 +10,7 @@ import { answerNo, answerYes, checkCurrentTransfer, forwardUserLine } from './se
 
 const CHECK_EVERY_MS = 1000
 const AGENT_ID = import.meta.env.VITE_ELEVENLABS_AGENT_ID as string | undefined
+const PAUSE_COMMAND = /^(?:stop(?: listening)?|(?:i am|i['’]m) done talking)[.!?]*$/i
 
 export function useVoiceSession(api: BankApi): VoiceScreenProps {
   const [state, dispatch] = useReducer(screenReducer, initialScreenState)
@@ -25,17 +26,22 @@ export function useVoiceSession(api: BankApi): VoiceScreenProps {
       dispatch({ type: 'session_started', conversation_id: conversationId })
     },
     onDisconnect: () => dispatch({ type: 'session_ended' }),
+    onError: () => {
+      dispatch({ type: 'message', message: { role: 'agent', text: "I couldn't connect to the voice agent. Check microphone access and try again." } })
+    },
     onMessage: ({ role, message }) => {
       dispatch({ type: 'message', message: { role, text: message } })
-      if (role === 'user') void forwardUserLine(api, stateRef.current, message)
+      if (role === 'user') {
+        if (conversation.status === 'connected' && PAUSE_COMMAND.test(message.trim().replace(/\s+/g, ' '))) {
+          conversation.setMuted(true)
+        } else {
+          void forwardUserLine(api, stateRef.current, message)
+        }
+      }
     },
   })
 
-  // When the agent starts answering, open the mic again so she can reply after it.
   const { mode, isMuted, setMuted } = conversation
-  useEffect(() => {
-    if (mode === 'speaking' && isMuted) setMuted(false)
-  }, [mode, isMuted, setMuted])
 
   // While a session is live, check for the current transfer once a second.
   useEffect(() => {
@@ -58,20 +64,19 @@ export function useVoiceSession(api: BankApi): VoiceScreenProps {
 
   const connected = conversation.status === 'connected'
 
-  const onMicTap = useCallback(async () => {
+  const onMicTap = useCallback(() => {
     if (connected) {
-      // Tapping while she talks ends her turn: muting reads as silence to ElevenLabs.
       setMuted(!isMuted)
       return
     }
+    if (conversation.status === 'connecting') return
     if (!AGENT_ID) {
       // No agent configured (fake mode demo): run a local session so checking and taps still work.
       dispatch({ type: 'session_started', conversation_id: 'demo' })
       return
     }
     try {
-      await navigator.mediaDevices.getUserMedia({ audio: true })
-      conversation.startSession({ agentId: AGENT_ID })
+      conversation.startSession({ agentId: AGENT_ID, connectionType: 'websocket' })
     } catch {
       dispatch({ type: 'message', message: { role: 'agent', text: 'I need microphone access to hear you.' } })
     }
@@ -89,5 +94,13 @@ export function useVoiceSession(api: BankApi): VoiceScreenProps {
     tell(await answerNo(api, stateRef.current, dispatch))
   }, [api, tell])
 
-  return { state, onMicTap: () => void onMicTap(), onYes, onNo }
+  const phase = conversation.status === 'connecting' ? 'connecting'
+    : !connected ? 'idle'
+    : mode === 'speaking' ? 'speaking'
+    : isMuted ? 'paused' : 'listening'
+  const getAudioLevel = !connected ? undefined
+    : mode === 'speaking' ? conversation.getOutputVolume
+    : !isMuted ? conversation.getInputVolume : undefined
+
+  return { state, phase, micMuted: isMuted, getAudioLevel, onMicTap, onYes, onNo }
 }

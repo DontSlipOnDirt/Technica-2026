@@ -62,6 +62,7 @@ body {
 
 /* Mic orb */
 .orb {
+  --mic-level: 0;
   position: relative;
   width: 120px;
   height: 120px;
@@ -84,13 +85,23 @@ body {
   opacity: 0;
 }
 
-.orb--active .orb__ring { animation: pulse 1.6s ease-out infinite; }
-.orb--active .orb__ring--2 { animation-delay: .5s; border-color: #34a853; }
-.orb--active .orb__ring--3 { animation-delay: 1s; border-color: #fbbc05; }
+.orb__ring {
+  transition: transform 100ms ease-out, opacity 140ms ease-out;
+}
 
-@keyframes pulse {
-  0% { transform: scale(.75); opacity: .9; }
-  100% { transform: scale(1.25); opacity: 0; }
+.orb--active .orb__ring {
+  opacity: calc(.2 + var(--mic-level) * .65);
+  transform: scale(calc(.76 + var(--mic-level) * .25));
+}
+.orb--active .orb__ring--2 {
+  border-color: #34a853;
+  opacity: calc(.12 + var(--mic-level) * .5);
+  transform: scale(calc(.86 + var(--mic-level) * .3));
+}
+.orb--active .orb__ring--3 {
+  border-color: #fbbc05;
+  opacity: calc(.08 + var(--mic-level) * .4);
+  transform: scale(calc(.96 + var(--mic-level) * .36));
 }
 
 .orb__core {
@@ -106,12 +117,26 @@ body {
 
 .orb__core svg { width: 36px; height: 36px; fill: #fff; }
 
+.orb__core { transition: transform 100ms ease-out; }
+.orb--speaking .orb__core { transform: scale(calc(1 + var(--mic-level) * .08)); }
+.orb--waiting .orb__core, .orb--connecting .orb__core { animation: mic-wait 1s ease-in-out infinite; }
+.orb:disabled { cursor: wait; }
+
+@keyframes mic-wait {
+  0%, 100% { transform: translateY(0) rotate(0); }
+  50% { transform: translateY(-3px) rotate(-6deg); }
+}
+
 .orb--blocked .orb__core { background: var(--red); }
+.orb--blocked .orb__core { animation: none; transform: none; }
 .orb--blocked .orb__ring { animation: none; opacity: .35; border-color: var(--red); transform: scale(1.1); }
 .orb--blocked .orb__ring--2, .orb--blocked .orb__ring--3 { opacity: 0; }
 
 @media (prefers-reduced-motion: reduce) {
-  .orb--active .orb__ring { animation: none; opacity: .5; }
+  .orb--active .orb__ring { transition: none; transform: scale(.9); }
+  .orb--active .orb__ring--2 { transform: scale(1); }
+  .orb--active .orb__ring--3 { transform: scale(1.1); }
+  .orb .orb__core { animation: none; transition: none; transform: none; }
 }
 
 /* Are you sure? */
@@ -218,6 +243,12 @@ body {
   border-radius: 16px;
   font-size: 17px;
   line-height: 1.35;
+}
+
+.chat__end {
+  flex: 0 0 56px;
+  margin: auto -16px -12px;
+  background: #fff;
 }
 
 .chat__msg--user {
