@@ -33,6 +33,19 @@ function show(state: ScreenState, onYes = vi.fn(async () => {}), onNo = vi.fn(as
 }
 
 describe('VoiceScreen', () => {
+  it('switches the page between light and dark without changing the conversation', async () => {
+    show(stateWith(null))
+    const toggle = screen.getByRole('button', { name: 'Dark mode' })
+    expect(toggle).toHaveAttribute('aria-pressed', 'false')
+    await userEvent.click(toggle)
+    expect(document.documentElement).toHaveAttribute('data-theme', 'dark')
+    expect(toggle).toHaveAttribute('aria-pressed', 'true')
+    expect(screen.getByRole('button', { name: 'Done talking' })).toBeInTheDocument()
+    await userEvent.click(toggle)
+    expect(document.documentElement).toHaveAttribute('data-theme', 'light')
+    expect(toggle).toHaveAttribute('aria-pressed', 'false')
+  })
+
   it('offers Start listening while microphone input is paused', () => {
     render(<VoiceScreen state={stateWith(null)} phase="paused" micMuted onMicTap={vi.fn()} onYes={vi.fn(async () => {})} onNo={vi.fn(async () => {})} />)
     expect(screen.getByRole('status')).toHaveTextContent('Microphone paused — tap to listen')
@@ -96,7 +109,7 @@ describe('VoiceScreen', () => {
   it('idle shows Tap to talk and the logo', () => {
     show(stateWith(null, false))
     expect(screen.getByText('Tap to talk')).toBeInTheDocument()
-    expect(screen.getByAltText('Capital One')).toBeInTheDocument()
+    expect(screen.getByAltText('Strombus')).toHaveAttribute('src', '/strombus-logo.png')
   })
 
   it('confirming shows the payment and both buttons', () => {

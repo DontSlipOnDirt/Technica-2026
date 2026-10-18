@@ -1,3 +1,4 @@
+import { useEffect, useState } from 'react'
 import type { Kind } from '../api/types'
 import type { ScreenState } from '../session/screenState'
 import { Chat } from './Chat'
@@ -40,12 +41,28 @@ function statusLine(state: ScreenState, phase?: VoicePhase, micMuted?: boolean):
 
 /** The one voice screen: logo, mic, status, the current panel, and the chat. */
 export function VoiceScreen({ state, phase, micMuted, getAudioLevel, onMicTap, onYes, onNo }: VoiceScreenProps) {
+  const [darkMode, setDarkMode] = useState(false)
+  useEffect(() => {
+    document.documentElement.dataset.theme = darkMode ? 'dark' : 'light'
+    return () => { delete document.documentElement.dataset.theme }
+  }, [darkMode])
   const { panel, transfer } = state
   return (
     <main className={`screen${panel === 'blocked' ? ' screen--blocked' : ''}`}>
       <header className="screen__header">
-        <img src="/capitalone-logo.svg" alt="Capital One" className="screen__logo" />
-        <span className="screen__label">Voice</span>
+        <img src="/strombus-logo.png" alt="Strombus" width={56} height={56} className="screen__logo" />
+        <div className="screen__actions">
+          <span className="screen__label">Voice</span>
+          <button type="button" className="theme-toggle" aria-label="Dark mode" aria-pressed={darkMode} title={darkMode ? 'Switch to light mode' : 'Switch to dark mode'} onClick={() => setDarkMode(!darkMode)}>
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              {darkMode ? (
+                <><circle cx="12" cy="12" r="4" /><path d="M12 2v2m0 16v2M2 12h2m16 0h2M5 5l1.5 1.5m11 11L19 19M5 19l1.5-1.5m11-11L19 5" /></>
+              ) : (
+                <path d="M20.5 14a8.5 8.5 0 0 1-10.5-10.5A8.5 8.5 0 1 0 20.5 14Z" />
+              )}
+            </svg>
+          </button>
+        </div>
       </header>
 
       <div className="screen__mic">
