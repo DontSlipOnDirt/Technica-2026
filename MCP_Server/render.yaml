@@ -4,7 +4,7 @@ services:
     runtime: python
     rootDir: MCP_Server   # Build and start commands run from here.
     buildCommand: pip install -r requirements.txt
-    startCommand: python MCP_Server
+    startCommand: python MCP_Server.py
     envVars:
       - key: NESSIE_API_KEY
         sync: false

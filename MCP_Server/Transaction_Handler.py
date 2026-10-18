@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import functools
 import math
-import os
 from datetime import date
 from decimal import Decimal, InvalidOperation
 from typing import Any, Callable, Literal, ParamSpec, get_args
@@ -45,8 +44,7 @@ def _respond(fn: Callable[P, Any]) -> Callable[P, dict[str, Any]]:
 def _get_client() -> NessieClient:
     global _client
     if _client is None:
-        # NessieClient has no default key; Nessie_Client already loaded .env into the environment.
-        _client = NessieClient(api_key=os.environ.get("NESSIE_API_KEY"))
+        _client = NessieClient()
     return _client
 
 
@@ -145,7 +143,16 @@ def _try_update(client: NessieClient, path: str, payload: dict) -> dict:
         return {"error": str(exc), "http_status": exc.status, "body": exc.body}
 
 
-def _withdrawal_payload(amount: float, description: str) -> dict:
+def _try_post(client: NessieClient, path: str, payload: dict) -> dict:
+    """Best-effort POST used to undo a half-finished operation: report, don't raise."""
+    try:
+        return client.post(path, json=payload)
+    except Exception as exc:
+        return {"error": f"{type(exc).__name__}: {exc}"}
+
+
+def _transaction_payload(amount: float, description: str) -> dict:
+    """Body for a completed withdrawal or deposit (they share the same fields)."""
     return {"medium": "balance", "transaction_date": _today(),
             "status": TRANSACTION_STATUS, "amount": amount, "description": description}
 
@@ -254,7 +261,13 @@ def create_account(customer_id: str, account_type: AccountType, nickname: str,
 def make_transfer(customer_id: str, from_account_id: str, to_account_id: str,
                   amount: float, description: str = "Transfer"):
     """Move money between two different accounts, both of which must belong to
-    the customer."""
+    the customer.
+
+    Nessie transfers are not used. The money moves as a withdrawal from the
+    source account followed by a deposit into the destination account. The
+    withdrawal goes first so that a failure there (for example, insufficient
+    funds) creates nothing. If the deposit fails after the withdrawal has
+    gone through, a refund deposit is posted back to the source account."""
     from_id = _required(from_account_id, "from_account_id")
     to_id = _required(to_account_id, "to_account_id")
     amount = _check_amount(amount)
@@ -266,10 +279,22 @@ def make_transfer(customer_id: str, from_account_id: str, to_account_id: str,
     _require_owned(owned_ids, from_id)
     _require_owned(owned_ids, to_id)
 
-    return client.post(f"accounts/{from_id}/transfers", json={
-        "medium": "balance", "payee_id": to_id, "transaction_date": _today(),
-        "status": TRANSACTION_STATUS, "amount": amount,
-        "description": _opt(description) or "Transfer"})
+    note = _opt(description) or "Transfer"
+    withdrawal = client.post(f"accounts/{from_id}/withdrawals",
+                             json=_transaction_payload(amount, f"{note} (to account {to_id})"))
+    try:
+        deposit = client.post(f"accounts/{to_id}/deposits",
+                              json=_transaction_payload(amount, f"{note} (from account {from_id})"))
+    except Exception as exc:
+        refund = _try_post(client, f"accounts/{from_id}/deposits",
+                           _transaction_payload(amount, f"Reversal of failed transfer: {note}"))
+        outcome = ("The withdrawal was reversed with a refund deposit."
+                   if "error" not in refund else
+                   f"The refund deposit also failed ({refund['error']}), so the money is still "
+                   f"out of account {from_id}; check that account.")
+        raise _Failed(f"Withdrew {amount} from account {from_id}, but the deposit into account "
+                      f"{to_id} failed ({exc}). {outcome}")
+    return {"withdrawal": withdrawal, "deposit": deposit}
 
 
 @_respond
@@ -291,7 +316,7 @@ def pay_bill(customer_id: str, bill_id: str, from_account_id: str, amount: float
 
     payee = bill.get("payee") or bill_id
     withdrawal = client.post(f"accounts/{from_id}/withdrawals",
-                             json=_withdrawal_payload(amount, f"Bill payment: {payee}"))
+                             json=_transaction_payload(amount, f"Bill payment: {payee}"))
 
     if _is_recurring(bill):
         update: Any = "skipped (recurring bill)"
@@ -321,7 +346,7 @@ def pay_loan(customer_id: str, loan_id: str, from_account_id: str, amount: float
         raise _Failed(f"Amount {amount} is more than the amount owed ({owed})")
 
     withdrawal = client.post(f"accounts/{from_id}/withdrawals",
-                             json=_withdrawal_payload(amount, f"Loan payment: {loan_id}"))
+                             json=_transaction_payload(amount, f"Loan payment: {loan_id}"))
 
     if owed is not None:
         remaining = round(owed - amount, 2)
