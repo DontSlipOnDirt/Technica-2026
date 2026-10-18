@@ -33,6 +33,22 @@ function show(state: ScreenState, onYes = vi.fn(async () => {}), onNo = vi.fn(as
 }
 
 describe('VoiceScreen', () => {
+  it.each(['executed', 'held', 'unknown'] as const)('dismisses a %s notification without changing the transaction', async (status) => {
+    const state = stateWith(transfer({ status }))
+    const props = { state, onMicTap: vi.fn(), onYes: vi.fn(async () => {}), onNo: vi.fn(async () => {}) }
+    const { rerender } = render(<VoiceScreen {...props} />)
+    await userEvent.click(screen.getByRole('button', { name: 'Dismiss notification' }))
+    expect(screen.queryByRole('button', { name: 'Dismiss notification' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+    expect(screen.queryByText(/has been sent/)).not.toBeInTheDocument()
+    expect(props.onYes).not.toHaveBeenCalled()
+    expect(props.onNo).not.toHaveBeenCalled()
+    rerender(<VoiceScreen {...props} state={{ ...state, messages: [{ role: 'agent', text: 'Hello' }] }} />)
+    expect(screen.queryByRole('button', { name: 'Dismiss notification' })).not.toBeInTheDocument()
+    rerender(<VoiceScreen {...props} state={stateWith(transfer({ status, transfer_id: 't_2' }))} />)
+    expect(screen.getByRole('button', { name: 'Dismiss notification' })).toBeInTheDocument()
+  })
+
   it('switches the page between light and dark without changing the conversation', async () => {
     show(stateWith(null))
     const toggle = screen.getByRole('button', { name: 'Dark mode' })

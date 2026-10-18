@@ -4,6 +4,7 @@ import type { ScreenState } from '../session/screenState'
 import { Chat } from './Chat'
 import { ConfirmPanel } from './ConfirmPanel'
 import { MicOrb, type VoicePhase } from './MicOrb'
+import { Notification } from './Notification'
 import { ScamBox } from './ScamBox'
 import { SentBox } from './SentBox'
 import { UnsureBox } from './UnsureBox'
@@ -73,9 +74,13 @@ export function VoiceScreen({ state, phase, micMuted, getAudioLevel, onMicTap, o
       {panel === 'confirming' && transfer && (
         <ConfirmPanel key={transfer.transfer_id} transfer={transfer} onYes={onYes} onNo={onNo} />
       )}
-      {panel === 'sent' && state.sentText && <SentBox text={state.sentText} />}
-      {panel === 'blocked' && transfer && <ScamBox transfer={transfer} />}
-      {panel === 'unsure' && <UnsureBox />}
+      {(panel === 'sent' || panel === 'blocked' || panel === 'unsure') && (
+        <Notification key={`${state.conversation_id}:${transfer?.transfer_id}:${panel}`}>
+          {panel === 'sent' && state.sentText && <SentBox text={state.sentText} />}
+          {panel === 'blocked' && transfer && <ScamBox transfer={transfer} />}
+          {panel === 'unsure' && <UnsureBox />}
+        </Notification>
+      )}
 
       <Chat messages={state.messages} />
     </main>

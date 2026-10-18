@@ -248,6 +248,29 @@ body {
 .btn--yes { background: var(--green); }
 .btn--no { background: var(--red); }
 
+.notification { position: relative; display: flow-root; flex-shrink: 0; }
+.notification > section { padding-right: 56px; }
+.notification__close {
+  position: absolute;
+  top: 10px;
+  right: 22px;
+  display: grid;
+  place-items: center;
+  width: 40px;
+  height: 40px;
+  padding: 0;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  font-size: 28px;
+  line-height: 1;
+  cursor: pointer;
+}
+.notification__close:hover { background: var(--line); }
+.notification__close:focus-visible { outline: 3px solid var(--focus); outline-offset: 2px; }
+
 /* Sent */
 .sent {
   margin: 4px 16px 12px;
