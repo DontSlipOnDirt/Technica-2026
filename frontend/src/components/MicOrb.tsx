@@ -21,7 +21,7 @@ export function MicOrb({ active, blocked, phase, micMuted, getAudioLevel, onTap 
     let frame: number
     const update = () => {
       const sample = getAudioLevel()
-      const level = Number.isFinite(sample) ? Math.min(1, Math.max(0, (sample - 0.01) * 4)) : 0
+      const level = Number.isFinite(sample) ? Math.min(1, Math.max(0, (sample - 0.05) * 3)) : 0
       button.style.setProperty('--mic-level', String(level))
       frame = requestAnimationFrame(update)
     }

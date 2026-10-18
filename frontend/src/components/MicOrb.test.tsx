@@ -37,6 +37,17 @@ describe('MicOrb microphone activity', () => {
     expect(level()).toBeLessThan(speakingLevel)
   })
 
+  it('ignores quiet background noise and uses gentler movement for speech', () => {
+    const getInputVolume = vi.fn(() => 0.04)
+    render(<MicOrb active blocked={false} onTap={vi.fn()} getAudioLevel={getInputVolume} />)
+    const button = screen.getByRole('button')
+    act(() => nextFrame(0))
+    expect(Number(button.style.getPropertyValue('--mic-level'))).toBe(0)
+    getInputVolume.mockReturnValue(0.15)
+    act(() => nextFrame(16))
+    expect(Number(button.style.getPropertyValue('--mic-level'))).toBeCloseTo(0.3)
+  })
+
   it('stops sampling and resets when the microphone is muted', () => {
     const getInputVolume = vi.fn(() => 0.6)
     const { rerender } = render(<MicOrb active blocked={false} onTap={vi.fn()} getAudioLevel={getInputVolume} />)
