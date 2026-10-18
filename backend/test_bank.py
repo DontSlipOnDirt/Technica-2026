@@ -68,6 +68,9 @@ class FakeNessie:
         for ending, error in self.fail_paths.items():
             if path.endswith(ending):
                 raise error
+        if path.endswith(("/deposits", "/withdrawals")) and "status" not in body:
+            # As the real Nessie answers: "1 validation error for DepositCreate status field required".
+            raise NessieApiError("Nessie request failed with status 400", 400)
         self.posted.append((path, body))
         if path == "/customers/cust-rose/accounts":
             self.more_accounts.append({"_id": "acct-new", **body})
@@ -222,7 +225,7 @@ def test_pay_bill_fills_the_amount_and_marks_the_bill_paid():
     assert t["payee_name"] == "Pepco"
     bank.confirm(t["transfer_id"])
     assert nessie.posted == [(f"/accounts/{ACCOUNT}/withdrawals", {
-        "medium": "balance", "amount": 600.0, "transaction_date": "2026-10-17", "description": "Bill payment: Pepco"})]
+        "medium": "balance", "status": "completed", "amount": 600.0, "transaction_date": "2026-10-17", "description": "Bill payment: Pepco"})]
     assert nessie.puts == [("/bills/bill-1", {"status": "completed"})]
 
 
@@ -293,7 +296,7 @@ def test_withdrawal_waits_for_a_yes_then_posts_once():
     bank.confirm(t["transfer_id"])
     bank.confirm(t["transfer_id"])
     assert nessie.posted == [(f"/accounts/{ACCOUNT}/withdrawals", {
-        "medium": "balance", "amount": 40, "transaction_date": "2026-10-17", "description": "Withdrawal"})]
+        "medium": "balance", "status": "completed", "amount": 40, "transaction_date": "2026-10-17", "description": "Withdrawal"})]
 
 
 def test_a_scam_story_holds_a_withdrawal():
@@ -315,7 +318,7 @@ def test_deposit_waits_for_a_yes_then_posts():
     assert t["spoken_message"].startswith("I'll put $25.00 into your checking account")
     bank.confirm(t["transfer_id"])
     assert nessie.posted == [(f"/accounts/{ACCOUNT}/deposits", {
-        "medium": "balance", "amount": 25, "transaction_date": "2026-10-17", "description": "Birthday check"})]
+        "medium": "balance", "status": "completed", "amount": 25, "transaction_date": "2026-10-17", "description": "Birthday check"})]
 
 
 def test_deposits_and_withdrawals_must_be_positive():
@@ -506,7 +509,7 @@ def test_moving_money_between_her_accounts_waits_for_a_yes_then_moves_it_once():
     assert nessie.posted == [
         (f"/accounts/{SAVINGS}/transfers", {"transaction_date": "2026-10-17", "status": "completed", "amount": 500,
                                             "description": "Transfer to Checking [payee:acct-rose]"}),
-        (f"/accounts/{ACCOUNT}/deposits", {"medium": "balance", "amount": 500, "transaction_date": "2026-10-17",
+        (f"/accounts/{ACCOUNT}/deposits", {"medium": "balance", "status": "completed", "amount": 500, "transaction_date": "2026-10-17",
                                            "description": "Transfer from Rainy day"}),
     ]
 
@@ -548,7 +551,7 @@ def test_part_of_a_bill_can_be_paid_and_the_rest_stays_due():
                                    "The rest stays due. Are you sure?")
     bank.confirm(t["transfer_id"])
     assert nessie.posted == [(f"/accounts/{ACCOUNT}/withdrawals", {
-        "medium": "balance", "amount": 200, "transaction_date": "2026-10-17", "description": "Bill payment: Pepco"})]
+        "medium": "balance", "status": "completed", "amount": 200, "transaction_date": "2026-10-17", "description": "Bill payment: Pepco"})]
     assert nessie.puts == [("/bills/bill-1", {"payment_amount": 400})]
 
 
@@ -589,7 +592,7 @@ def test_loan_payment_waits_for_a_yes_then_lowers_what_is_owed():
     assert nessie.posted == []
     bank.confirm(t["transfer_id"])
     assert nessie.posted == [(f"/accounts/{ACCOUNT}/withdrawals", {
-        "medium": "balance", "amount": 350, "transaction_date": "2026-10-17", "description": "Loan payment: Auto loan"})]
+        "medium": "balance", "status": "completed", "amount": 350, "transaction_date": "2026-10-17", "description": "Loan payment: Auto loan"})]
     assert nessie.puts == [("/loans/loan-1", {"amount": 3850})]
 
 
