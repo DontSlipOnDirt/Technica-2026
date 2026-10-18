@@ -514,6 +514,49 @@ def test_moving_money_between_her_accounts_waits_for_a_yes_then_moves_it_once():
     ]
 
 
+def test_moving_money_between_her_accounts_changes_both_balances_once():
+    # The event's Nessie never changes balances, so the bank shows what it moved.
+    bank = make_bank()
+    t = bank.transfer_between_accounts("savings", "checking", 500)
+    bank.confirm(t["transfer_id"])
+    bank.confirm(t["transfer_id"])
+    balances = {a["name"]: a["balance"] for a in bank.list_accounts()}
+    assert balances == {"Checking": 3500.0, "Rainy day": 8500.0}
+    assert bank.summary()["balance"] == 3500.0
+
+
+def test_paying_a_bill_lowers_the_balance():
+    bank = make_bank()
+    bank.confirm(bank.pay_bill("pepco")["transfer_id"])
+    assert bank.summary()["balance"] == 2400.0
+
+
+def test_nothing_changes_a_balance_before_yes_or_when_held():
+    bank = make_bank()
+    bank.transfer_between_accounts("checking", "savings", 100)   # never confirmed
+    bank.add_transcript_line("c1", "the fraud department says move it to a safe account right now")
+    held = bank.request_transfer("Bob", 2000)
+    with pytest.raises(BankError):
+        bank.confirm(held["transfer_id"])
+    assert {a["name"]: a["balance"] for a in bank.list_accounts()} == {"Checking": 3000.0, "Rainy day": 9000.0}
+
+
+def test_a_failed_payment_changes_no_balance():
+    bank = make_bank(fail_posts=True)
+    t = bank.transfer_between_accounts("savings", "checking", 500)
+    with pytest.raises(BankError):
+        bank.confirm(t["transfer_id"])
+    assert bank.summary()["balance"] == 3000.0
+
+
+def test_the_fraud_check_sees_the_balance_after_earlier_moves():
+    # After moving most of checking out, sending the rest is "most of your balance".
+    bank = make_bank()
+    bank.confirm(bank.transfer_between_accounts("checking", "savings", 2500)["transfer_id"])
+    t = bank.request_transfer("Maria", 300)
+    assert "This is more than half of your balance" in t["reasons"]
+
+
 def test_her_own_accounts_are_not_new_payees():
     t = make_bank().transfer_between_accounts("checking", "savings", 100)
     assert t["risk_score"] == 0, t["reasons"]

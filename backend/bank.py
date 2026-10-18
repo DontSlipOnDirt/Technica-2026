@@ -151,6 +151,11 @@ class Bank:
         self._held_payees: set = set()
         self._customer_id: Optional[str] = None
         self._opened: set = set()   # Accounts opened through this server: not trusted payees yet
+        # The event's Nessie records transfers, deposits and withdrawals but never changes a
+        # balance, so we keep what this server has moved per account and add it on top.
+        # A stand-in that updates its own balances (demo_bank) sets moves_balances = True.
+        self._moved: Dict[str, float] = {}
+        self._track_balances = not getattr(nessie, "moves_balances", False)
 
     # ---- Transcript ------------------------------------------------------------
 
@@ -418,6 +423,7 @@ class Bank:
 
         if kind in ("withdrawal", "deposit"):
             self._nessie.post(f"/accounts/{source}/{kind}s", cash(p["memo"]))
+            self._move(source, amount if kind == "deposit" else -amount)
         elif kind in ("transfer", "own_transfer"):
             # Nessie's TransferCreate has no payee field; like the team's seed, the
             # payee rides in the description as a [payee:...] tag that _payee_of reads.
@@ -428,10 +434,12 @@ class Bank:
                 "amount": amount,
                 "description": f"{memo} [payee:{p['payee_id']}]",
             })
+            self._move(source, -amount)
             if kind == "own_transfer":
                 # With no payee field the transfer can't credit her other account, so a deposit does.
                 try:
                     self._nessie.post(f"/accounts/{p['payee_id']}/deposits", cash(f"Transfer from {t['from_account_name']}"))
+                    self._move(p["payee_id"], amount)
                 except NessieApiError as err:
                     log.warning("Nessie deposit for %s failed after the money left, status %s: %s",
                                 t["transfer_id"], err.status, err.detail)
@@ -441,6 +449,7 @@ class Bank:
                         "again; call Capital One so they can check it.")
         elif kind == "bill":
             self._nessie.post(f"/accounts/{source}/withdrawals", cash(f"Bill payment: {t['payee_name']}"))
+            self._move(source, -amount)
             left = None if p["owed"] is None else round(p["owed"] - amount, 2)
             # Paid in full, the bill is done; paid in part, it stays due for the rest.
             self._follow_up("put", f"/bills/{p['bill_id']}",
@@ -448,6 +457,7 @@ class Bank:
         elif kind == "loan":
             # Like the Nessie-framework handler: take the money out, then lower what's owed.
             self._nessie.post(f"/accounts/{source}/withdrawals", cash(f"Loan payment: {t['payee_name']}"))
+            self._move(source, -amount)
             if p["owed"] is not None:
                 self._follow_up("put", f"/loans/{p['loan_id']}", {"amount": round(p["owed"] - amount, 2)})
         elif kind == "new_account":
@@ -457,6 +467,19 @@ class Bank:
             new = created.get("objectCreated") if isinstance(created, dict) else None
             if isinstance(new, dict) and new.get("_id"):
                 self._opened.add(new["_id"])
+
+    def _move(self, account_id: str, change: float) -> None:
+        """Note money this server moved, right after Nessie accepted it. Call with the lock held."""
+        if self._track_balances:
+            self._moved[account_id] = round(self._moved.get(account_id, 0.0) + change, 2)
+
+    def _balance(self, account: Dict[str, Any]) -> Optional[float]:
+        """Nessie's balance plus what this server has moved in or out of the account."""
+        base = _number(account.get("balance"))
+        moved = self._moved.get(account.get("_id"), 0.0)
+        if base is None:
+            return moved if moved else None
+        return round(base + moved, 2)
 
     def _follow_up(self, method: str, path: str, body: Dict[str, Any]) -> None:
         """A Nessie call after the money has moved: log a failure, never undo or repeat the payment."""
@@ -489,14 +512,14 @@ class Bank:
     def summary(self) -> Dict[str, Any]:
         account = self._get(f"/accounts/{self._config.account_id}") or {}
         return {
-            "balance": account.get("balance"),
+            "balance": self._balance(account),
             "account_name": self._config.account_name,
             "bills_due": [{k: b[k] for k in ("biller_name", "amount", "due_date")} for b in self.bills()],
         }
 
     def list_accounts(self) -> List[Dict[str, Any]]:
         """Every account the customer has, by name."""
-        return [{"name": self._name_of(a), "type": a.get("type"), "balance": a.get("balance")}
+        return [{"name": self._name_of(a), "type": a.get("type"), "balance": self._balance(a)}
                 for a in self._accounts()]
 
     def recent_purchases(self, limit: int = 10, merchant_name: str = "", account_name: str = "") -> List[Dict[str, Any]]:
@@ -712,7 +735,7 @@ class Bank:
         return UserHistory(
             known_payees=known,
             average_transfer=sum(amounts) / len(amounts) if amounts else 0.0,
-            current_balance=float(source.get("balance") or 0),
+            current_balance=self._balance(source) or 0.0,
             recent_transfers=[
                 PastTransfer(to_account_id=_payee_of(t), amount=float(t.get("amount", 0)),
                              made_at=_as_datetime(t.get("transaction_date", self._today())))
