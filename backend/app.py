@@ -15,17 +15,20 @@ from starlette.middleware.cors import CORSMiddleware
 from starlette.requests import Request
 from starlette.responses import JSONResponse
 
-from bank import Bank, BankError
+from bank import Bank, BankError, account_phrase
 
 NO_MONEY_MOVED = "No money was moved."
 
 INSTRUCTIONS = (
     "Banking tools for a Capital One voice assistant. Every tool replies with JSON: "
     "{ok, say, ...data} or {ok: false, error, say}. Read 'say' to the customer word for word. "
-    "Money tools never move money on their own: request_transfer and pay_bill only prepare a payment "
-    "and return its transfer_id. Only call confirm_payment(transfer_id) after the "
-    "customer clearly says yes. Never make up balances, amounts, payees, bills, or purchases. "
-    "If a payment is stopped as a possible scam, do not argue or offer "
+    "Tools that move money or open an account never act on their own: request_transfer, "
+    "transfer_between_accounts, pay_bill, pay_loan, withdraw, deposit, and create_account only prepare "
+    "the request and return its transfer_id. Only call confirm_payment(transfer_id) after the "
+    "customer clearly says yes; if they say no, call cancel_payment(transfer_id). "
+    "Accounts, bills, and loans are named the way the customer says them; there are no IDs to look up. "
+    "Never make up balances, amounts, payees, bills, loans, or purchases. "
+    "If a request is stopped as a possible scam, do not argue or offer "
     "workarounds; tell them to call Capital One."
 )
 
@@ -37,9 +40,13 @@ async def _run(fn: Callable[..., Any], *args) -> Any:
 
 # Added to every tool description: ElevenLabs passes these to the model on each turn.
 GROUNDING = (
-    " Never make up balances, amounts, payees, bills, or purchases: only say what this tool returned."
+    " Never make up balances, amounts, payees, bills, loans, or purchases: only say what this tool returned."
     " If ok is false, read 'say' and do not guess."
 )
+
+
+def _count(n: int, noun: str) -> str:
+    return f"{n} {noun}{'' if n == 1 else 's'}"
 
 
 def create_app(bank: Bank, allowed_origins: Optional[list] = None) -> Tuple[MCPServer, Starlette]:
@@ -60,6 +67,8 @@ def create_app(bank: Bank, allowed_origins: Optional[list] = None) -> Tuple[MCPS
         say = f"{err} {NO_MONEY_MOVED}" if money_tool else str(err)
         return json.dumps({"ok": False, "error": str(err), "say": say})
 
+    # ---- Read tools ----
+
     @tool("The customer's balance and bills that are due. Replies with JSON: ok, say, summary.")
     async def get_summary() -> str:
         try:
@@ -75,15 +84,121 @@ def create_app(bank: Bank, allowed_origins: Optional[list] = None) -> Tuple[MCPS
         except BankError as err:
             return failed(err, money_tool=False)
         names = ", ".join(f"{a['name']} with ${float(a['balance'] or 0):,.2f}" for a in accounts)
-        return ok(f"You have {len(accounts)} account{'s' if len(accounts) != 1 else ''}: {names}.", accounts=accounts)
+        return ok(f"You have {_count(len(accounts), 'account')}: {names}.", accounts=accounts)
 
-    @tool("The customer's most recent purchases, newest first. Replies with JSON: ok, say, purchases.")
-    async def get_recent_purchases(limit: int = 10) -> str:
+    @tool((
+        "The customer's purchases from all accounts, newest first. Optional: merchant_name to show only one "
+        "store (e.g. 'CVS'), account_name to show only one account (e.g. 'credit card'). "
+        "Replies with JSON: ok, say, purchases (description, amount, date, account)."
+    ))
+    async def get_recent_purchases(limit: int = 10, merchant_name: str = "", account_name: str = "") -> str:
         try:
-            purchases = await _run(bank.recent_purchases, limit)
+            purchases = await _run(bank.recent_purchases, limit, merchant_name, account_name)
         except BankError as err:
             return failed(err, money_tool=False)
-        return ok(f"Here are your last {len(purchases)} purchases.", purchases=purchases)
+        store = f" from {merchant_name.strip()}" if merchant_name.strip() else ""
+        if not purchases:
+            return ok(f"I don't see any purchases{store}.", purchases=purchases)
+        if len(purchases) == 1:
+            return ok(f"Here is your last purchase{store}.", purchases=purchases)
+        return ok(f"Here are your last {len(purchases)} purchases{store}.", purchases=purchases)
+
+    async def latest(fn: Callable[..., Any], noun: str, account_name: str, limit: int) -> str:
+        """Deposits, withdrawals, or transfers, newest first."""
+        try:
+            rows = await _run(fn, account_name, limit)
+        except BankError as err:
+            return failed(err, money_tool=False)
+        if not rows:
+            return ok(f"I don't see any {noun}.", **{noun: rows})
+        if len(rows) == 1:
+            return ok(f"Here is your last {noun[:-1]}.", **{noun: rows})
+        return ok(f"Here are your last {len(rows)} {noun}.", **{noun: rows})
+
+    @tool((
+        "Money put into the customer's accounts, newest first. Optional account_name (e.g. 'savings'). "
+        "Replies with JSON: ok, say, deposits (account, description, amount, date, status)."
+    ))
+    async def get_deposits(account_name: str = "", limit: int = 10) -> str:
+        return await latest(bank.deposits, "deposits", account_name, limit)
+
+    @tool((
+        "Money taken out of the customer's accounts (cash, bill and loan payments), newest first. "
+        "Optional account_name. Replies with JSON: ok, say, withdrawals (account, description, amount, date, status)."
+    ))
+    async def get_withdrawals(account_name: str = "", limit: int = 10) -> str:
+        return await latest(bank.withdrawals, "withdrawals", account_name, limit)
+
+    @tool((
+        "Transfers the customer made, to people or between their own accounts, newest first. Optional account_name. "
+        "Replies with JSON: ok, say, transfers (from, to, amount, date, description, status); "
+        "'from' and 'to' are account or payee names, or null when unknown."
+    ))
+    async def get_transfers(account_name: str = "", limit: int = 10) -> str:
+        return await latest(bank.transfers, "transfers", account_name, limit)
+
+    @tool((
+        "The customer's bills, soonest first. By default only bills still due; include_paid=true adds paid and "
+        "cancelled ones. recurring=true shows only repeating bills, recurring=false only one-time bills; leave it "
+        "out for both. Optional account_name. "
+        "Replies with JSON: ok, say, bills (biller_name, amount, due_date, status, recurring, account)."
+    ))
+    async def get_bills(account_name: str = "", recurring: Optional[bool] = None, include_paid: bool = False) -> str:
+        try:
+            bills = await _run(bank.bills, account_name, recurring, include_paid)
+        except BankError as err:
+            return failed(err, money_tool=False)
+        label = {True: "repeating bill", False: "one-time bill", None: "bill"}[recurring]
+        if include_paid:
+            say = f"I found {_count(len(bills), label)}." if bills else f"I don't see any {label}s."
+        elif bills:
+            listed = ", ".join(f"{b['biller_name']} for ${float(b['amount'] or 0):,.2f}" for b in bills)
+            say = f"You have {_count(len(bills), label)} due: {listed}."
+        else:
+            say = f"You have no {label}s due."
+        return ok(say, bills=bills)
+
+    @tool((
+        "The customer's loans: what is still owed and the usual monthly payment. "
+        "Replies with JSON: ok, say, loans (name, amount_owed, monthly_payment, status, description, account)."
+    ))
+    async def get_loans() -> str:
+        try:
+            loans = await _run(bank.loans)
+        except BankError as err:
+            return failed(err, money_tool=False)
+        if not loans:
+            return ok("You don't have any loans.", loans=loans)
+        listed = ", ".join(f"your {loan['name'].lower()} with ${float(loan['amount_owed'] or 0):,.2f} still owed"
+                           for loan in loans)
+        return ok(f"You have {_count(len(loans), 'loan')}: {listed}.", loans=loans)
+
+    @tool((
+        "Look up a store the customer has bought from by name (e.g. 'Corner Cafe'): its category and address. "
+        "Only searches the merchants on the customer's own purchases. "
+        "Replies with JSON: ok, say, merchants (name, category, address)."
+    ))
+    async def find_merchant(name: str) -> str:
+        try:
+            merchants = await _run(bank.find_merchant, name)
+        except BankError as err:
+            return failed(err, money_tool=False)
+        if not merchants:
+            return ok(f"I couldn't find a store called {name} in your purchases.", merchants=merchants)
+        if len(merchants) == 1:
+            m = merchants[0]
+            where = f", at {m['address']}" if m["address"] else ""
+            return ok(f"I found {m['name']}{where}.", merchants=merchants)
+        return ok(f"I found {len(merchants)} stores: {', '.join(m['name'] for m in merchants)}.", merchants=merchants)
+
+    # ---- Money tools: each only prepares a request; confirm_payment carries it out ----
+
+    async def prepare(fn: Callable[..., Any], *args) -> str:
+        try:
+            t = await _run(fn, *args)
+        except BankError as err:
+            return failed(err, money_tool=True)
+        return ok(t["spoken_message"], transfer=t)
 
     @tool((
         "Prepare a transfer to someone the customer names. Does NOT send money. "
@@ -91,66 +206,84 @@ def create_app(bank: Bank, allowed_origins: Optional[list] = None) -> Tuple[MCPS
         "risk_score, reasons, ...). If transfer.status is 'held', the payment is stopped for good."
     ))
     async def request_transfer(payee_name: str, amount: float, memo: str = "") -> str:
-        try:
-            t = await _run(bank.request_transfer, payee_name, amount, memo)
-        except BankError as err:
-            return failed(err, money_tool=True)
-        return ok(t["spoken_message"], transfer=t)
+        return await prepare(bank.request_transfer, payee_name, amount, memo)
 
     @tool((
-        "Prepare a bill payment by biller name, e.g. 'Pepco'. Leave amount out to pay the bill in full. "
-        "Does NOT send money. Replies with JSON: ok, say (read it aloud exactly), transfer."
+        "Prepare moving money between two of the customer's own accounts, named the way they say them "
+        "(e.g. from_account 'savings', to_account 'checking'). Does NOT move money. "
+        "Replies with JSON: ok, say (read it aloud exactly), transfer. If transfer.status is 'held', it is stopped for good."
     ))
-    async def pay_bill(biller_name: str, amount: Optional[float] = None) -> str:
-        try:
-            t = await _run(bank.pay_bill, biller_name, amount)
-        except BankError as err:
-            return failed(err, money_tool=True)
-        return ok(t["spoken_message"], transfer=t)
+    async def transfer_between_accounts(from_account: str, to_account: str, amount: float, memo: str = "") -> str:
+        return await prepare(bank.transfer_between_accounts, from_account, to_account, amount, memo)
+
+    @tool((
+        "Prepare a bill payment by biller name, e.g. 'Pepco'. Leave amount out to pay the bill in full, or give a "
+        "smaller amount to pay part of it; it can't be more than is owed. Money comes from checking unless "
+        "from_account names another account. Does NOT send money. "
+        "Replies with JSON: ok, say (read it aloud exactly), transfer."
+    ))
+    async def pay_bill(biller_name: str, amount: Optional[float] = None, from_account: str = "") -> str:
+        return await prepare(bank.pay_bill, biller_name, amount, from_account)
+
+    @tool((
+        "Prepare a loan payment, e.g. loan_name 'auto'. Leave loan_name out if the customer has one loan. "
+        "Leave amount out to pay the usual monthly payment; it can't be more than is still owed. Money comes from "
+        "checking unless from_account names another account. Does NOT send money. "
+        "Replies with JSON: ok, say (read it aloud exactly), transfer."
+    ))
+    async def pay_loan(loan_name: str = "", amount: Optional[float] = None, from_account: str = "") -> str:
+        return await prepare(bank.pay_loan, loan_name, amount, from_account)
 
     @tool((
         "Prepare a cash withdrawal from the customer's account. Does NOT move money. "
         "Replies with JSON: ok, say (read it aloud exactly), transfer. If transfer.status is 'held', it is stopped for good."
     ))
     async def withdraw(amount: float, memo: str = "") -> str:
-        try:
-            t = await _run(bank.withdraw, amount, memo)
-        except BankError as err:
-            return failed(err, money_tool=True)
-        return ok(t["spoken_message"], transfer=t)
+        return await prepare(bank.withdraw, amount, memo)
 
     @tool((
         "Prepare a deposit into the customer's account. Does NOT move money. "
         "Replies with JSON: ok, say (read it aloud exactly), transfer."
     ))
     async def deposit(amount: float, memo: str = "") -> str:
-        try:
-            t = await _run(bank.deposit, amount, memo)
-        except BankError as err:
-            return failed(err, money_tool=True)
-        return ok(t["spoken_message"], transfer=t)
+        return await prepare(bank.deposit, amount, memo)
 
     @tool((
-        "Send the payment that is waiting for a yes. Only call this after the customer clearly says yes. "
-        "Pass transfer.transfer_id from request_transfer, pay_bill, withdraw, or deposit. Replies with JSON: ok, say, transfer."
+        "Prepare opening a new account with a $0 balance. account_type is 'Checking', 'Savings', or 'Credit Card'; "
+        "nickname is optional. Does NOT open it: it gets the same scam check as a payment and needs a yes. "
+        "Replies with JSON: ok, say (read it aloud exactly), transfer. If transfer.status is 'held', it is stopped for good."
+    ))
+    async def create_account(account_type: str, nickname: str = "") -> str:
+        return await prepare(bank.create_account, account_type, nickname)
+
+    @tool((
+        "Carry out the request that is waiting for a yes. Only call this after the customer clearly says yes. "
+        "Pass transfer.transfer_id from request_transfer, transfer_between_accounts, pay_bill, pay_loan, withdraw, "
+        "deposit, or create_account. Replies with JSON: ok, say, transfer."
     ))
     async def confirm_payment(transfer_id: str) -> str:
         try:
             t = await _run(bank.confirm, transfer_id)
         except BankError as err:
             return failed(err, money_tool=True)
-        account = t["from_account_name"].lower()
+        if t["kind"] == "new_account":
+            return ok(f"Done. Your new {t['account_type'].lower()} account is open. "
+                      "Is there anything else I can help with?", transfer=t)
+        account, payee = account_phrase(t["from_account_name"]), t["payee_name"]
         what = {"withdrawal": f"taken out of your {account} account",
-                "deposit": f"added to your {account} account"}.get(t["kind"], f"sent to {t['payee_name']}")
+                "deposit": f"added to your {account} account",
+                "own_transfer": f"moved from your {account} account to your {account_phrase(payee)} account",
+                "loan": f"paid toward your {payee.lower()}"}.get(t["kind"], f"sent to {payee}")
         return ok(f"Done. ${t['amount']:,.2f} has been {what}. Is there anything else I can help with?", transfer=t)
 
-    @tool("Cancel the payment that is waiting for a yes, when the customer says no. Replies with JSON.")
+    @tool("Cancel the request that is waiting for a yes, when the customer says no. Replies with JSON.")
     async def cancel_payment(transfer_id: str) -> str:
         try:
             t = await _run(bank.cancel, transfer_id)
         except BankError as err:
             return failed(err, money_tool=False)
-        return ok(f"Okay, I didn't send it. {NO_MONEY_MOVED}", transfer=t)
+        undone = "open it" if t["kind"] == "new_account" else "send it"
+        return ok(f"Okay, I didn't {undone}. {NO_MONEY_MOVED}", transfer=t)
 
     # ---- App endpoints (the screen) ------------------------------------------------
 

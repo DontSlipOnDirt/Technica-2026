@@ -8,17 +8,33 @@ interface ConfirmPanelProps {
   onNo(): Promise<void>
 }
 
+/** The question and the Yes button's words for each kind of request. */
+function describe(t: CurrentTransfer): { question: string; yesLabel: string } {
+  const money = formatMoney(t.amount)
+  switch (t.kind) {
+    case 'withdrawal':
+      return { question: `Withdraw ${money} from ${t.from_account_name}?`, yesLabel: '✓ Yes, withdraw' }
+    case 'deposit':
+      return { question: `Deposit ${money} into ${t.from_account_name}?`, yesLabel: '✓ Yes, deposit' }
+    case 'own_transfer':
+      return { question: `Move ${money} from ${t.from_account_name} to ${t.payee_name}?`, yesLabel: '✓ Yes, move it' }
+    case 'loan':
+      return { question: `Pay ${money} toward ${t.payee_name} from ${t.from_account_name}?`, yesLabel: '✓ Yes, pay it' }
+    case 'new_account': {
+      const type = t.account_type ? `${t.account_type} ` : ''
+      const called = t.payee_name !== t.account_type ? ` called ${t.payee_name}` : ''
+      return { question: `Open a new ${type}account${called}?`, yesLabel: '✓ Yes, open it' }
+    }
+    case 'transfer':
+    case 'bill':
+      return { question: `Pay ${t.payee_name} ${money} from ${t.from_account_name}?`, yesLabel: '✓ Yes, pay it' }
+  }
+}
+
 /** "Are you sure?" with big Yes/No buttons. Both lock after one tap so a payment can't be sent twice. */
 export function ConfirmPanel({ transfer, onYes, onNo }: ConfirmPanelProps) {
   const [busy, setBusy] = useState(false)
-  const money = formatMoney(transfer.amount)
-  const question = transfer.kind === 'withdrawal'
-    ? `Withdraw ${money} from ${transfer.from_account_name}?`
-    : transfer.kind === 'deposit'
-      ? `Deposit ${money} into ${transfer.from_account_name}?`
-      : `Pay ${transfer.payee_name} ${money} from ${transfer.from_account_name}?`
-  const yesLabel = transfer.kind === 'withdrawal' ? '✓ Yes, withdraw'
-    : transfer.kind === 'deposit' ? '✓ Yes, deposit' : '✓ Yes, pay it'
+  const { question, yesLabel } = describe(transfer)
 
   async function answer(handler: () => Promise<void>) {
     if (busy) return

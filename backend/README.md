@@ -5,9 +5,9 @@ One Python web app with two doors into the same `Bank`:
 - **`/mcp`**: the MCP server the ElevenLabs agent connects to (streamable HTTP, stateless).
 - **`/api/...`**: what the voice screen calls.
 
-Every payment takes the same path: request → fraud check on the customer's real words → waits for a yes → Nessie. A held transfer can never be sent, and no tool moves money directly.
+Every payment takes the same path: request → fraud check on the customer's real words → waits for a yes → Nessie. A held transfer can never be sent, and no tool moves money directly. Opening an account takes the same path.
 
-This replaces the TypeScript stdio server on the `nessie-mcp` branch. ElevenLabs can only reach MCP servers over HTTP at a public URL.
+This replaces the TypeScript stdio server on the `nessie-mcp` branch, and it has every capability of the `MCP_Server` on the `Nessie-framework` branch, so the ElevenLabs agent only needs this one server. ElevenLabs can only reach MCP servers over HTTP at a public URL.
 
 ## Files
 
@@ -17,11 +17,39 @@ This replaces the TypeScript stdio server on the `nessie-mcp` branch. ElevenLabs
 | `bank.py` | The one door for money: transcript, payees, fraud check, pending transfers, Nessie calls |
 | `app.py` | MCP tools and `/api` routes on one Starlette app |
 | `server.py` | Starts it from environment variables |
+| `demo_bank.py` | An in-memory Nessie for `DEMO_MODE=true` |
 | `fraud_check.py`, `gemini_signals.py`, `models.py` | The fraud check (unchanged) |
 
 ## MCP tools (for the agent)
 
-`get_summary`, `list_accounts`, `get_recent_purchases`, `request_transfer(payee_name, amount, memo)`, `pay_bill(biller_name, amount?)`, `withdraw(amount, memo)`, `deposit(amount, memo)`, `confirm_payment(transfer_id)`, `cancel_payment(transfer_id)`. `withdraw` and `deposit` take the same request → fraud check → yes path as transfers.
+Accounts, bills, loans, and stores are named the way the customer says them ("savings", "Pepco", "auto", "CVS"). Nessie IDs never leave the server.
+
+**Read only:**
+
+| Tool | Returns |
+|---|---|
+| `get_summary` | Checking balance and the bills that are due |
+| `list_accounts` | Every account with its balance |
+| `get_recent_purchases(limit?, merchant_name?, account_name?)` | Purchases, newest first, optionally from one store or one account |
+| `get_deposits(account_name?, limit?)`, `get_withdrawals(...)`, `get_transfers(...)` | Newest first; transfers name both ends |
+| `get_bills(account_name?, recurring?, include_paid?)` | Bills still due by default; `recurring` true or false filters repeating or one-time bills |
+| `get_loans` | Each loan's amount owed and monthly payment |
+| `find_merchant(name)` | Category and address of a store from the customer's own purchases (at most 5; never the whole Nessie list) |
+
+**Prepare only.** Each returns a `transfer_id` after the fraud check and waits for a yes:
+
+| Tool | On yes, in Nessie |
+|---|---|
+| `request_transfer(payee_name, amount, memo?)` | Transfer from checking to a known payee |
+| `transfer_between_accounts(from_account, to_account, amount, memo?)` | Transfer from one of her accounts plus a deposit into the other (this Nessie's transfers have no payee field) |
+| `pay_bill(biller_name, amount?, from_account?)` | Withdrawal, then the bill is marked paid, or its amount lowered after a partial payment. Never more than is owed |
+| `pay_loan(loan_name?, amount?, from_account?)` | Withdrawal, then the loan's amount owed is lowered. Defaults to the monthly payment; never more than is owed |
+| `withdraw(amount, memo?)`, `deposit(amount, memo?)` | Withdrawal or deposit on checking |
+| `create_account(account_type, nickname?)` | New Checking, Savings, or Credit Card account with $0 |
+
+**The yes and the no:** `confirm_payment(transfer_id)` carries out the waiting request; `cancel_payment(transfer_id)` drops it. `confirm_payment` is the only tool that changes anything in Nessie.
+
+Payments come from checking unless `from_account` names another account. The customer's own accounts, bills, and loans count as known payees, so the new-payee rule doesn't fire on them. An account opened through this server is the exception: "open a new safe account, then move your money into it" is a common scam, so it stays a new payee. For the same reason, opening an account gets the fraud check too, and anything the check flags (a "confirm" or a "hold") stops it: nothing about opening an account is urgent, and a false stop only costs a call to Capital One.
 
 Every tool replies with one JSON object:
 
@@ -33,7 +61,7 @@ Every tool replies with one JSON object:
 {"ok": false, "error": "That payment can't be sent.", "say": "That payment can't be sent. No money was moved."}
 ```
 
-The agent reads `say` aloud and passes `transfer.transfer_id` to `confirm_payment` or `cancel_payment`. Read tools return `summary` or `purchases` in place of `transfer`.
+The agent reads `say` aloud and passes `transfer.transfer_id` to `confirm_payment` or `cancel_payment`. `transfer.kind` is `transfer`, `own_transfer`, `bill`, `loan`, `withdrawal`, `deposit`, or `new_account` (which also has `account_type`). Read tools return `summary`, `accounts`, `purchases`, `deposits`, `withdrawals`, `transfers`, `bills`, `loans`, or `merchants` in place of `transfer`.
 
 ## App endpoints (for the screen)
 

@@ -24,12 +24,21 @@ function withTransfer(t: CurrentTransfer, state: ScreenState = initialScreenStat
 
 describe('screenReducer', () => {
   it.each([
-    { kind: 'withdrawal' as const, message: '$1.00 has been withdrawn from Checking.' },
-    { kind: 'deposit' as const, message: '$1.00 has been deposited into Checking.' },
-  ])('describes an executed $kind accurately', ({ kind, message }) => {
-    const state = withTransfer(transfer({ kind, amount: 1, status: 'executed' }))
+    { kind: 'withdrawal' as const, payee_name: 'cash', message: '$1.00 has been withdrawn from Checking.' },
+    { kind: 'deposit' as const, payee_name: 'deposit', message: '$1.00 has been deposited into Checking.' },
+    { kind: 'own_transfer' as const, payee_name: 'Savings', message: '$1.00 has been moved from Checking to Savings.' },
+    { kind: 'loan' as const, payee_name: 'Auto loan', message: '$1.00 has been paid toward your auto loan.' },
+  ])('describes an executed $kind accurately', ({ kind, payee_name, message }) => {
+    const state = withTransfer(transfer({ kind, amount: 1, payee_name, status: 'executed' }))
     expect(state.panel).toBe('sent')
     expect(state.sentText).toBe(message)
+  })
+
+  it('says a newly opened account is open', () => {
+    const state = withTransfer(transfer({
+      kind: 'new_account', amount: 0, payee_name: 'Travel', account_type: 'Savings', status: 'executed',
+    }))
+    expect(state.sentText).toBe('Your new savings account is open.')
   })
 
   it('held shows the scam panel', () => {

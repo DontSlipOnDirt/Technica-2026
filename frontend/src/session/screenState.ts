@@ -52,6 +52,12 @@ function sentText(transfer: CurrentTransfer): string {
       return `Your ${transfer.payee_name} bill of ${money} has been sent.`
     case 'transfer':
       return `${money} has been sent to ${transfer.payee_name}.`
+    case 'own_transfer':
+      return `${money} has been moved from ${transfer.from_account_name} to ${transfer.payee_name}.`
+    case 'loan':
+      return `${money} has been paid toward your ${transfer.payee_name.toLowerCase()}.`
+    case 'new_account':
+      return `Your new ${transfer.account_type ? `${transfer.account_type.toLowerCase()} ` : ''}account is open.`
   }
 }
 

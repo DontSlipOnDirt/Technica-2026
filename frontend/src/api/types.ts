@@ -1,7 +1,8 @@
 // Shapes shared with the backend. Field names match the contract exactly (snake_case).
 
 export type Decision = 'allow' | 'confirm' | 'hold'
-export type Kind = 'transfer' | 'bill' | 'withdrawal' | 'deposit'
+// own_transfer: between the customer's own accounts. new_account: opening one (amount 0, needs a yes too).
+export type Kind = 'transfer' | 'bill' | 'withdrawal' | 'deposit' | 'own_transfer' | 'loan' | 'new_account'
 export type TransferStatus = 'awaiting_yes' | 'held' | 'executed' | 'cancelled'
 
 /** The transfer the backend is currently working on, as GET /api/transfer/current returns it. */
@@ -16,6 +17,8 @@ export interface CurrentTransfer {
   payee_name: string
   amount: number
   from_account_name: string
+  /** new_account only: "Checking", "Savings", or "Credit Card". payee_name is the new account's nickname. */
+  account_type?: string
 }
 
 /** A backend error. The message is the backend's {"error": "..."} text. */

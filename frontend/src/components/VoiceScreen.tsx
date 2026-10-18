@@ -1,3 +1,4 @@
+import type { Kind } from '../api/types'
 import type { ScreenState } from '../session/screenState'
 import { Chat } from './Chat'
 import { ConfirmPanel } from './ConfirmPanel'
@@ -15,12 +16,18 @@ export interface VoiceScreenProps {
   getAudioLevel?(): number
 }
 
+const STOPPED: Record<Kind, string> = {
+  transfer: 'Transfer stopped',
+  own_transfer: 'Transfer stopped',
+  bill: 'Bill payment stopped',
+  loan: 'Loan payment stopped',
+  withdrawal: 'Withdrawal stopped',
+  deposit: 'Deposit stopped',
+  new_account: 'Account not opened',
+}
+
 function statusLine(state: ScreenState, phase?: VoicePhase, micMuted?: boolean): string {
-  if (state.panel === 'blocked') {
-    if (state.transfer?.kind === 'withdrawal') return 'Withdrawal stopped'
-    if (state.transfer?.kind === 'deposit') return 'Deposit stopped'
-    return 'Transfer stopped'
-  }
+  if (state.panel === 'blocked') return STOPPED[state.transfer?.kind ?? 'transfer']
   if (phase === 'connecting') return 'Connecting…'
   if (phase === 'paused') return 'Microphone paused — tap to listen'
   if (phase === 'waiting') return 'Waiting for a reply…'

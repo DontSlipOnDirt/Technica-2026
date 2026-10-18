@@ -40,17 +40,32 @@ describe('VoiceScreen', () => {
   })
 
   it.each([
-    { kind: 'withdrawal' as const, question: 'Withdraw $1.00 from Checking?', button: '✓ Yes, withdraw' },
-    { kind: 'deposit' as const, question: 'Deposit $1.00 into Checking?', button: '✓ Yes, deposit' },
-  ])('describes a $kind confirmation accurately', ({ kind, question, button }) => {
-    show(stateWith(transfer({ kind, amount: 1, payee_name: 'cash' })))
+    { kind: 'withdrawal' as const, payee_name: 'cash', question: 'Withdraw $1.00 from Checking?', button: '✓ Yes, withdraw' },
+    { kind: 'deposit' as const, payee_name: 'deposit', question: 'Deposit $1.00 into Checking?', button: '✓ Yes, deposit' },
+    { kind: 'own_transfer' as const, payee_name: 'Savings', question: 'Move $1.00 from Checking to Savings?', button: '✓ Yes, move it' },
+    { kind: 'loan' as const, payee_name: 'Auto loan', question: 'Pay $1.00 toward Auto loan from Checking?', button: '✓ Yes, pay it' },
+  ])('describes a $kind confirmation accurately', ({ kind, payee_name, question, button }) => {
+    show(stateWith(transfer({ kind, amount: 1, payee_name })))
     expect(screen.getByText(question)).toBeInTheDocument()
     expect(screen.getByRole('button', { name: button })).toBeInTheDocument()
   })
 
   it.each([
+    { payee_name: 'Travel', question: 'Open a new Savings account called Travel?' },
+    { payee_name: 'Savings', question: 'Open a new Savings account?' },
+  ])('asks before opening an account named $payee_name', ({ payee_name, question }) => {
+    show(stateWith(transfer({ kind: 'new_account', amount: 0, payee_name, account_type: 'Savings' })))
+    expect(screen.getByText(question)).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: '✓ Yes, open it' })).toBeInTheDocument()
+  })
+
+  it.each([
     { kind: 'withdrawal' as const, message: 'We stopped your $1.00 withdrawal. Your money has not moved.', status: 'Withdrawal stopped' },
     { kind: 'deposit' as const, message: 'We stopped your $1.00 deposit. Your money has not moved.', status: 'Deposit stopped' },
+    { kind: 'own_transfer' as const, message: 'We stopped your $1.00 transfer. Your money has not moved.', status: 'Transfer stopped' },
+    { kind: 'bill' as const, message: 'We stopped your $1.00 bill payment. Your money has not moved.', status: 'Bill payment stopped' },
+    { kind: 'loan' as const, message: 'We stopped your $1.00 loan payment. Your money has not moved.', status: 'Loan payment stopped' },
+    { kind: 'new_account' as const, message: 'We did not open the new account. Your money has not moved.', status: 'Account not opened' },
   ])('describes a held $kind accurately', ({ kind, message, status }) => {
     show(stateWith(transfer({ kind, amount: 1, status: 'held', decision: 'hold' })))
     expect(screen.getByText(message)).toBeInTheDocument()
