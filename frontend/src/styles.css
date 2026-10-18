@@ -165,8 +165,27 @@ body {
 
 .orb__core svg { width: 36px; height: 36px; fill: #fff; }
 
+.orb__core--shell {
+  width: 90px;
+  height: 90px;
+  overflow: hidden;
+  background: transparent;
+}
+
+/* Frame the circular artwork within the original 666 x 375 image. */
+.orb__image {
+  position: absolute;
+  width: 246.667%;
+  height: 138.889%;
+  max-width: none;
+  left: -74.444%;
+  top: -17.037%;
+  pointer-events: none;
+  user-select: none;
+}
+
 .orb__core { transition: transform 100ms ease-out; }
-.orb--speaking .orb__core { transform: scale(calc(1 + var(--mic-level) * .08)); }
+.orb--active .orb__core { transform: scale(calc(1 + var(--mic-level) * .08)); }
 .orb--waiting .orb__core, .orb--connecting .orb__core { animation: mic-wait 1s ease-in-out infinite; }
 .orb:disabled { cursor: wait; }
 
