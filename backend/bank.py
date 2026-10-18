@@ -279,8 +279,11 @@ class Bank:
     def _history(self) -> UserHistory:
         account_id = self._config.account_id
         account = self._get(f"/accounts/{account_id}") or {}
+        # Only transfers she sent where we can tell who got the money. That also skips
+        # test transfers someone left in Nessie, which would drag her "usual amount" down.
         transfers = [t for t in (self._get(f"/accounts/{account_id}/transfers") or [])
-                     if t.get("payer_id", account_id) == account_id]
+                     if t.get("payer_id", account_id) == account_id
+                     and t.get("status") != "cancelled" and _payee_of(t)]
         bills = self._get(f"/accounts/{account_id}/bills") or []
         amounts = [float(t.get("amount", 0)) for t in transfers]
         return UserHistory(

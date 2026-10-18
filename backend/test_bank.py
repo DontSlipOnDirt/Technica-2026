@@ -106,6 +106,35 @@ def test_yes_sends_exactly_what_was_checked_once():
     )]
 
 
+def test_no_memo_still_records_who_it_went_to():
+    nessie = FakeNessie()
+    bank = Bank(nessie, CONFIG)
+    bank.confirm(bank.request_transfer("Maria", 50)["transfer_id"])
+    assert nessie.posted[0][1]["description"] == "Transfer to Maria [payee:acct-maria]"
+
+
+def test_history_reads_the_payee_from_the_description():
+    # This event's Nessie keeps no payee_id on transfers, only what we put in the description.
+    nessie = FakeNessie()
+    nessie.transfers = [
+        {"amount": 100, "transaction_date": "2026-10-01", "status": "completed",
+         "description": "To Maria [payee:acct-maria]"},
+    ]
+    t = Bank(nessie, CONFIG).request_transfer("Maria", 50)
+    assert "This is someone you haven't sent money to before" not in t["reasons"]
+
+
+def test_history_skips_transfers_with_no_known_payee():
+    # Stray $1 test transfers would make her usual amount look tiny.
+    nessie = FakeNessie()
+    nessie.transfers += [
+        {"amount": 1, "transaction_date": "2026-10-17", "status": "completed", "description": "x"},
+        {"amount": 1, "transaction_date": "2026-10-17", "status": "pending", "description": "x"},
+    ]
+    t = Bank(nessie, CONFIG).request_transfer("Maria", 150)
+    assert "This is much larger than your usual transfer" not in t["reasons"]
+
+
 def test_a_held_transfer_can_never_be_confirmed():
     nessie = FakeNessie()
     bank = Bank(nessie, CONFIG)
