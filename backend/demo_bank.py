@@ -37,6 +37,9 @@ def _merchant(merchant_id: str, name: str, category: str, number: str, street: s
 class DemoNessie:
     """Answers the Nessie routes the bank uses, and remembers what happens during the demo."""
 
+    # Unlike the event's Nessie, this stand-in updates balances itself, so Bank doesn't add its own.
+    moves_balances = True
+
     def __init__(self):
         self.accounts: List[Dict[str, Any]] = [
             {"_id": ROSE, "type": "Checking", "nickname": "Rose checking", "balance": 3400.0,
